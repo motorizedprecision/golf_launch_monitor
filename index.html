@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — ROI (30fps tuned)</title>
+<title>MP Launch Monitor — Video Load Hotfix (ROI, 30 fps tuned)</title>
 <style>
-  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; }
+  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
   h1 { color: var(--brand); font-size: 20px; margin: 0 0 12px 0; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
@@ -21,13 +21,19 @@
   #log { white-space: pre-wrap; font-size: 12px; color: #cbd5e1; background: #0b0d12; border:1px solid var(--line); border-radius:10px; padding:10px; max-width: 560px; }
   label { display:flex; align-items:center; gap:8px; }
   .badge { border:1px solid var(--line); border-radius: 999px; padding: 4px 8px; font-size: 12px; color: var(--muted); }
+  .drop { border:2px dashed #3a3f4a; border-radius:12px; padding:10px; color:#9aa4b2; }
+  .drop.drag { border-color:#4cd964; color:#eaeef5; }
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — ROI (30 fps tuned)</h1>
+<h1>Motorized Precision • Launch Monitor — Video Load Hotfix</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
+  <div id="drop" class="drop">or drop a video file here</div>
+</div>
+
+<div class="row">
   <select id="markerSel" title="Calibration object">
     <option value="tray">Ball Tray (34×25 cm)</option>
     <option value="letter">Letter 8.5×11 in</option>
@@ -36,27 +42,31 @@
   </select>
   <input id="customW" type="number" step="0.001" placeholder="W (m)" style="width:110px;display:none">
   <input id="customH" type="number" step="0.001" placeholder="D (m)" style="width:110px;display:none">
+  <span class="badge">Scale = tray/paper • Ball = ROI</span>
 </div>
 
 <div class="row">
   <label>Method
     <select id="method">
-      <option value="seek" selected>Time‑step (best for 30 fps)</option>
+      <option value="seek" selected>Time‑step (30 fps)</option>
       <option value="rvfc">rVFC</option>
       <option value="auto">Auto</option>
     </select>
   </label>
   <label>Frames <input id="numFrames" type="number" value="150" min="6" max="600" style="width:90px"></label>
   <label>Δt (seek) <input id="deltaT" type="number" value="0.03333" step="0.0005" style="width:110px"><span class="status">≈1/30</span></label>
-  <span class="badge">Scale = tray/paper • Ball = ROI</span>
 </div>
 
 <div class="row">
   <button id="setRoiBtn">Set Ball ROI</button>
   <button id="clearRoiBtn">Clear ROI</button>
   <button id="clearPtsBtn">Clear Calib Pts</button>
+</div>
+
+<div class="row">
   <button id="primeBtn">Prime Autoplay</button>
-  <label><input type="checkbox" id="debugOverlay" checked> Overlay</label>
+  <button id="resetBtn">Reset App</button>
+  <button id="clearCacheBtn">Clear Cache</button>
 </div>
 
 <div class="row">
@@ -68,7 +78,7 @@
 
 <video id="video" playsinline muted controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">Tap 4 tray/paper corners (scale), then draw the Ball ROI box. Defaults tuned for 30 fps: frames=150, Δt=0.03333.</p>
+<p class="status">Load a video, tap 4 tray/paper corners for scale, draw the Ball ROI box, then Analyze. This build adds a robust loader: waits for <i>loadedmetadata</i>/<i>canplay</i>/<i>seeked</i>, logs errors, and supports same-file reselect & drag‑drop.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -89,22 +99,25 @@
 
 <script>
 const fileInput = document.getElementById('file');
+const drop = document.getElementById('drop');
 const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const analyzeBtn = document.getElementById('analyzeBtn');
-const previewBtn = document.getElementById('previewBtn');
-const clearPtsBtn = document.getElementById('clearPtsBtn');
-const setRoiBtn = document.getElementById('setRoiBtn');
-const clearRoiBtn = document.getElementById('clearRoiBtn');
-const primeBtn = document.getElementById('primeBtn');
 const markerSel = document.getElementById('markerSel');
 const customW = document.getElementById('customW');
 const customH = document.getElementById('customH');
 const methodSel = document.getElementById('method');
 const numFramesEl = document.getElementById('numFrames');
 const deltaTEl = document.getElementById('deltaT');
-const debugOverlay = document.getElementById('debugOverlay');
+const setRoiBtn = document.getElementById('setRoiBtn');
+const clearRoiBtn = document.getElementById('clearRoiBtn');
+const clearPtsBtn = document.getElementById('clearPtsBtn');
+const primeBtn = document.getElementById('primeBtn');
+const resetBtn = document.getElementById('resetBtn');
+const clearCacheBtn = document.getElementById('clearCacheBtn');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const previewBtn = document.getElementById('previewBtn');
+const debugOverlay = document.createElement('input'); debugOverlay.type='checkbox'; debugOverlay.checked=true;
 const why = document.getElementById('whyDisabled');
 const logEl = document.getElementById('log');
 
@@ -122,10 +135,58 @@ let roiMode = false;
 let roiStart = null;
 let lastCenters = []; // for preview
 let lastFrames = [];  // for preview
-let minAreaFrac = 0.000020;
-let maxAreaFrac = 0.003000;
+let objectURL = null; // revoke when resetting
+let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 30fps 406x720
 
 function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
+
+function waitForEvent(el, type, timeout=10000){
+  return new Promise((resolve, reject)=>{
+    const done = () => { cleanup(); resolve(); };
+    const on = () => done();
+    const to = setTimeout(()=>{ cleanup(); reject(new Error(type+' timeout')); }, timeout);
+    function cleanup(){ el.removeEventListener(type, on); clearTimeout(to); }
+    el.addEventListener(type, on, { once:true });
+  });
+}
+
+function cleanupObjectURL(){
+  if (objectURL) { URL.revokeObjectURL(objectURL); objectURL = null; }
+}
+
+function resetApp(){
+  try {
+    cleanupObjectURL();
+    video.pause();
+    video.removeAttribute('src'); video.load();
+    fileInput.value = '';
+    calibPts = []; roiRect = null; roiMode = false; roiStart = null;
+    lastCenters = []; lastFrames = [];
+    drawFrame();
+    log('App reset');
+  } catch(e){ log('Reset error: '+e.message); }
+  maybeEnableAnalyze();
+}
+
+resetBtn.onclick = resetApp;
+
+clearCacheBtn.onclick = async ()=>{
+  if (!('caches' in window)) { log('Cache API not available'); return; }
+  const keys = await caches.keys();
+  await Promise.all(keys.map(k=>caches.delete(k)));
+  log('Cleared service worker caches. Hard reload the page to ensure fresh code.');
+};
+
+video.addEventListener('error', () => {
+  const e = video.error;
+  if (!e) { log('Video error (no details)'); return; }
+  const map = { 1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED' };
+  log(`Video error: ${map[e.code]||e.code} (${e.message||'no message'})`);
+});
+
+['loadstart','loadedmetadata','loadeddata','canplay','canplaythrough','stalled','suspend','emptied','waiting'].forEach(ev=>{
+  video.addEventListener(ev, ()=> log(`video event: ${ev}, readyState=${video.readyState}`));
+});
 
 markerSel.onchange = () => {
   const isCustom = markerSel.value === 'custom';
@@ -134,25 +195,55 @@ markerSel.onchange = () => {
   maybeEnableAnalyze();
 };
 
-/* ---- Video load ---- */
+/* ---- File & Drop loading ---- */
 fileInput.onchange = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  log('Video selected: ' + (file.name || '(blob)'));
-  video.muted = true;
-  video.src = URL.createObjectURL(file);
-  await video.play().catch(()=>{});
-  video.pause();
-  video.currentTime = 0.03;
-  await new Promise(res => { video.onseeked = res; });
-  const area = Math.max(1, (video.videoWidth||1920) * (video.videoHeight||1080));
-  const minA = Math.max(6, Math.floor(area * minAreaFrac));
-  const maxA = Math.max(minA+1, Math.floor(area * maxAreaFrac));
-  log(`Detection area bounds: min≈${minA}, max≈${maxA}`);
-  window.MP_DET = {minA, maxA};
-  drawFrame(); calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[];
-  maybeEnableAnalyze();
+  try {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    if (!f.type || !f.type.startsWith('video/')) { log('Not a video file'); return; }
+    // allow same-file reselect next time
+    fileInput.blur(); setTimeout(()=>{ fileInput.value=''; }, 0);
+    await loadVideoFile(f);
+  } catch(err){ log('Load error: '+err.message); }
 };
+
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', async (e)=>{
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) await loadVideoFile(f);
+});
+
+async function loadVideoFile(file){
+  try {
+    log(`Loading: ${file.name} (${Math.round(file.size/1024)} kB)`);
+    cleanupObjectURL();
+    objectURL = URL.createObjectURL(file);
+    video.muted = true; video.playsInline = true;
+    video.src = objectURL;
+    // Wait for metadata then canplay
+    await waitForEvent(video,'loadedmetadata',15000);
+    log(`loadedmetadata: ${video.videoWidth}×${video.videoHeight}, duration≈${video.duration.toFixed(2)}s`);
+    drawFrame();
+    // Some Safari builds need a play() before canplay resolves
+    try { await video.play(); } catch(_){}
+    await waitForEvent(video,'canplay',15000).catch(()=>{});
+    video.pause();
+    // Seek to first usable frame
+    video.currentTime = Math.min(0.03, Math.max(0, (video.duration||0) * 0.01));
+    await waitForEvent(video,'seeked',15000);
+    drawFrame();
+    // Set detection area bounds from resolution
+    const area = Math.max(1, (video.videoWidth||1920) * (video.videoHeight||1080));
+    const minA = Math.max(6, Math.floor(area * minAreaFrac));
+    const maxA = Math.max(minA+1, Math.floor(area * maxAreaFrac));
+    log(`Detection area bounds: min≈${minA}, max≈${maxA}`);
+    window.MP_DET = {minA, maxA};
+    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[];
+  } finally {
+    maybeEnableAnalyze();
+  }
+}
 
 primeBtn.onclick = async () => {
   try {
@@ -239,7 +330,7 @@ async function extractFramesRVFC(n=150){
     try{ drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count}); why.textContent = `Sampling (rVFC): ${count+1}/${n}`; count++; if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; } handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe)); }catch(e){ console.error(e); done(e); }
   };
   let doneResolve, doneReject; const done = (err) => { err ? doneReject(err) : doneResolve(); }; const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
-  video.muted = true; video.playbackRate = 0.1; await video.play().catch(()=>{});
+  video.muted = true; video.playbackRate = 0.1; try { await video.play(); } catch(_){}
   handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
   await p; return frames;
 }
@@ -290,8 +381,22 @@ function detectCenters(frames, roi){
 
 /* ---- Kinematics ---- */
 function estimateCarry(v0, theta, drag=0.75){ const g=9.80665; return (v0*v0/g)*Math.sin(2*theta)*drag; }
-function applyH(H, pt){ const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
-function fitKinematics(centers, H){ const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t])); const i0=0, i2=Math.min(2, ground.length-1); if (i2 <= i0) return null; const dt = ground[i2][2] - ground[i0][2] || 0.03333; const vx = (ground[i2][0]-ground[i0][0]) / dt; const vy = (ground[i2][1]-ground[i0][1]) / dt; const vxy = Math.hypot(vx,vy); const dy_img = centers[i2].y - centers[i0].y; const theta = Math.atan2(-dy_img, vxy*40); const phi = Math.atan2(vy, vx); const v0 = vxy / Math.cos(theta); const carry_m = estimateCarry(v0, theta, 0.75); return {{ v0, theta, phi, carry_m, n: centers.length }}; }
+function fitKinematics(centers, H){
+  function applyH(H, pt){ const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
+  const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t]));
+  const i0=0, i2=Math.min(2, ground.length-1);
+  if (i2 <= i0) return null;
+  const dt = ground[i2][2] - ground[i0][2] || 0.03333;
+  const vx = (ground[i2][0]-ground[i0][0]) / dt;
+  const vy = (ground[i2][1]-ground[i0][1]) / dt;
+  const vxy = Math.hypot(vx,vy);
+  const dy_img = centers[i2].y - centers[i0].y;
+  const theta = Math.atan2(-dy_img, vxy*40); // heuristic
+  const phi = Math.atan2(vy, vx);
+  const v0 = vxy / Math.cos(theta);
+  const carry_m = estimateCarry(v0, theta, 0.75);
+  return { v0, theta, phi, carry_m, n: centers.length };
+}
 
 /* ---- Analyze ---- */
 analyzeBtn.onclick = async () => {
@@ -306,7 +411,7 @@ analyzeBtn.onclick = async () => {
     const n = Math.max(6, Math.min(600, parseInt(numFramesEl.value||'150',10)));
     const method = methodSel.value;
     let frames;
-    if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback && n <= 240)) { // rVFC safest for short bursts
+    if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback && n <= 240)) {
       frames = await extractFramesRVFC(n);
     } else {
       const dt = Math.max(1e-4, parseFloat(deltaTEl.value||'0.03333'));
@@ -356,7 +461,18 @@ previewBtn.onclick = async () => {
 /* Keep status fresh after visibility changes */
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeEnableAnalyze(); });
 
-// Service worker
+function maybeEnableAnalyze() {
+  const okCV = window.cvReady && typeof cv !== 'undefined';
+  const okVid = !!video.src && (video.readyState >= 2);
+  const okPts = calibPts.length === 4;
+  const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
+  const hasRVFC = !!video.requestVideoFrameCallback;
+  analyzeBtn.disabled = !(okCV && okVid && okPts && okROI);
+  previewBtn.disabled = lastCenters.length === 0;
+  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • CalibPoints ${calibPts.length}/4 • ROI: ${okROI?'✅':'❌'} • rVFC: ${hasRVFC ? '✅' : '❌'}`;
+}
+
+/* Service worker */
 if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('./sw.js'); } catch(e){} }
 </script>
 </body>
