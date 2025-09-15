@@ -3,27 +3,27 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor (Tray Debug)</title>
+<title>MP Launch Monitor (rVFC Debug)</title>
 <style>
-  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --warn:#ffd666; --err:#ff5e57; }
+  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
   h1 { color: var(--brand); font-size: 20px; margin: 0 0 12px 0; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
   button,input,select { font-size: 16px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background:#12141a; color:var(--ink); }
   button.primary { background: linear-gradient(180deg,#ff725c,#e2443a); border:0; color:#fff; }
   button[disabled]{ opacity:.5; }
-  #video, #canvas { width: 100%; max-width: 540px; background: #000; border: 1px solid var(--line); border-radius: 12px; display:block; }
+  #video, #canvas { width: 100%; max-width: 560px; background: #000; border: 1px solid var(--line); border-radius: 12px; display:block; }
   #canvas { margin-top: 8px; }
   .stat { background:#12141a; border:1px solid var(--line); border-radius:10px; padding:8px 12px; min-width:160px; }
   .stats { display:flex; gap:8px; flex-wrap:wrap; margin-top: 10px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .status { color: var(--muted); font-size: 14px; }
-  #log { white-space: pre-wrap; font-size: 12px; color: #cbd5e1; background: #0b0d12; border:1px solid var(--line); border-radius:10px; padding:10px; max-width: 540px; }
+  #log { white-space: pre-wrap; font-size: 12px; color: #cbd5e1; background: #0b0d12; border:1px solid var(--line); border-radius:10px; padding:10px; max-width: 560px; }
   label { display:flex; align-items:center; gap:8px; }
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor (Tray Debug)</h1>
+<h1>Motorized Precision • Launch Monitor (rVFC Debug)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -37,16 +37,28 @@
   <input id="customH" type="number" step="0.001" placeholder="D (m)" style="width:110px;display:none">
 </div>
 <div class="row">
+  <label>Method
+    <select id="method">
+      <option value="auto">Auto (prefer rVFC)</option>
+      <option value="rvfc">rVFC</option>
+      <option value="seek">Time-stepping</option>
+    </select>
+  </label>
+  <label>Frames <input id="numFrames" type="number" value="16" min="6" max="60" style="width:90px"></label>
+  <label>Δt (seek) <input id="deltaT" type="number" value="0.00417" step="0.0005" style="width:110px"><span class="status">≈1/240</span></label>
+  <label><input type="checkbox" id="debugOverlay" checked> Overlay</label>
+</div>
+<div class="row">
   <button id="clearBtn">Clear Points</button>
-  <label><input type="checkbox" id="debugOverlay" checked> Debug overlay</label>
   <button id="analyzeBtn" class="primary" disabled>Analyze</button>
+  <button id="previewBtn" disabled>Preview overlay</button>
 </div>
 
-<div class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • Points 0/4</div>
+<div class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • Points 0/4 • rVFC: ?</div>
 
 <video id="video" playsinline controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">Tap the 4 corners of your calibration object (tray/paper) on the canvas below, then press Analyze. The canvas will show progress and the tracked ball path.</p>
+<p class="status">Tap the 4 corners of your tray/paper on the canvas. Analyze steps through frames (video player won’t “play” during analysis), drawing the ball overlay on the canvas and logging progress below.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -59,8 +71,8 @@
 <h3 style="margin:12px 0 6px 0">Log</h3>
 <div id="log" class="mono">—</div>
 
-<!-- Define Module BEFORE loading OpenCV.js -->
 <script>
+  // Ensure OpenCV init flag exists BEFORE loading script
   window.cvReady = false;
   window.Module = {
     onRuntimeInitialized() {
@@ -78,10 +90,14 @@ const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const analyzeBtn = document.getElementById('analyzeBtn');
+const previewBtn = document.getElementById('previewBtn');
 const clearBtn = document.getElementById('clearBtn');
 const markerSel = document.getElementById('markerSel');
 const customW = document.getElementById('customW');
 const customH = document.getElementById('customH');
+const methodSel = document.getElementById('method');
+const numFramesEl = document.getElementById('numFrames');
+const deltaTEl = document.getElementById('deltaT');
 const debugOverlay = document.getElementById('debugOverlay');
 const why = document.getElementById('whyDisabled');
 const logEl = document.getElementById('log');
@@ -95,6 +111,10 @@ const out = {
 };
 
 let clickedPts = []; // four [x,y] points
+let lastCenters = []; // for preview
+let lastFrames = [];  // for preview
+
+function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
 
 markerSel.onchange = () => {
   const isCustom = markerSel.value === 'custom';
@@ -108,12 +128,11 @@ fileInput.onchange = async (e) => {
   if (!file) return;
   log('Video selected: ' + (file.name || '(blob)'));
   video.src = URL.createObjectURL(file);
-  // Load first frame
   await video.play().catch(()=>{});
   video.pause();
   video.currentTime = 0.03;
   await new Promise(res => { video.onseeked = res; });
-  drawFrame(); clickedPts = [];
+  drawFrame(); clickedPts = []; lastCenters=[]; lastFrames=[];
   maybeEnableAnalyze();
 };
 
@@ -132,8 +151,6 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 clearBtn.onclick = () => { clickedPts = []; drawFrame(); log('Cleared all points'); maybeEnableAnalyze(); };
-
-function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
 
 function drawFrame(overlayDot=null) {
   const vw = video.videoWidth || 1920, vh = video.videoHeight || 1080;
@@ -160,8 +177,10 @@ function maybeEnableAnalyze() {
   const okCV = window.cvReady && typeof cv !== 'undefined';
   const okVid = !!video.src && (video.readyState >= 2);
   const okPts = clickedPts.length === 4;
+  const hasRVFC = !!video.requestVideoFrameCallback;
   analyzeBtn.disabled = !(okCV && okVid && okPts);
-  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • Points ${clickedPts.length}/4`;
+  previewBtn.disabled = lastCenters.length === 0;
+  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • Points ${clickedPts.length}/4 • rVFC: ${hasRVFC ? '✅' : '❌'}`;
 }
 
 /* ---- Calibration geometry ---- */
@@ -189,21 +208,55 @@ function applyH(H, pt) {
   return [a/c, b/c];
 }
 
-/* ---- Frame extraction & detection with progress ---- */
-async function extractFrames(n=16, step=1){
-  const frames=[]; let dt=1/240; let t=video.currentTime;
+/* ---- Frame extraction (two methods) ---- */
+async function extractFramesSeek(n=16, dt=1/240){
+  const frames=[]; let t=video.currentTime;
   for(let i=0;i<n;i++){
     video.currentTime = t;
     await new Promise(res=>{ video.onseeked = res; });
     drawFrame();
     frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i});
-    why.textContent = `Analyzing: sampling frames (${i+1}/${n})…`;
+    why.textContent = `Sampling (seek): ${i+1}/${n}`;
     await new Promise(requestAnimationFrame);
-    t += dt*step;
+    t += dt;
   }
   return frames;
 }
 
+async function extractFramesRVFC(n=16){
+  const frames=[];
+  let count=0;
+  let handle=0;
+  const onframe = (now, meta) => {
+    try{
+      drawFrame();
+      frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count});
+      why.textContent = `Sampling (rVFC): ${count+1}/${n}`;
+      count++;
+      if (count >= n) {
+        video.pause();
+        cancelAnimationFrame(handle);
+        done();
+        return;
+      }
+      handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
+    }catch(e){
+      console.error(e);
+      done(e);
+    }
+  };
+  let doneResolve, doneReject;
+  const done = (err) => { err ? doneReject(err) : doneResolve(); };
+  const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
+  // Ensure playing (required on iOS to get rVFC callbacks)
+  video.playbackRate = 0.1;
+  await video.play().catch(()=>{});
+  handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
+  await p;
+  return frames;
+}
+
+/* ---- Detection ---- */
 function detectCenters(frames){
   const centers=[]; let prevGray=null;
   for(const f of frames){
@@ -235,7 +288,7 @@ function detectCenters(frames){
     src.delete(); gray.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete();
     if (prevGray) prevGray.delete();
     prevGray = cv.matFromImageData(f.img); cv.cvtColor(prevGray,prevGray,cv.COLOR_RGBA2GRAY);
-    why.textContent = `Analyzing: detecting ball (${f.idx+1}/${frames.length})…`;
+    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length}`;
   }
   if (prevGray) prevGray.delete();
   return centers;
@@ -263,26 +316,37 @@ function fitKinematics(centers, H){
 /* ---- Analyze ---- */
 analyzeBtn.onclick = async () => {
   try {
-    analyzeBtn.disabled = true;
+    analyzeBtn.disabled = true; previewBtn.disabled = true;
     why.textContent = 'Analyzing: solving homography…';
     const [W,H] = calibMeters();
     const dst = [[0,0],[0,H],[W,H],[W,0]];
     const Hm = solveHomography(clickedPts, dst);
     log('Homography solved from 4 points → meters');
 
-    const frames = await extractFrames(16,1);
-    log(`Extracted ${frames.length} frames`);
+    const n = Math.max(6, Math.min(60, parseInt(numFramesEl.value||'16',10)));
+    const method = methodSel.value;
+    let frames;
+    if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback)) {
+      frames = await extractFramesRVFC(n);
+    } else {
+      const dt = Math.max(1e-4, parseFloat(deltaTEl.value||'0.00417'));
+      frames = await extractFramesSeek(n, dt);
+    }
+    log(`Extracted ${frames.length} frames via ${method}`);
+    lastFrames = frames;
 
     const centers = detectCenters(frames);
     log(`Detections: ${centers.length} candidate ball positions`);
+    lastCenters = centers.slice();
+    previewBtn.disabled = centers.length > 0;
 
     if (centers.length < 4) {
-      why.textContent = 'Could not track the ball — try brighter light, closer framing, or trim clip around impact.';
-      analyzeBtn.disabled = false; Hm.delete(); return;
+      why.textContent = 'Could not track the ball — try brighter light, tighter framing, or change method/Δt.';
+      analyzeBtn.disabled = false; return;
     }
     why.textContent = 'Fitting short-arc trajectory…';
     const kin = fitKinematics(centers, Hm);
-    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; Hm.delete(); return; }
+    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; return; }
 
     out.speed.textContent   = `${kin.v0.toFixed(1)} m/s (${(kin.v0*2.237).toFixed(1)} mph)`;
     out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
@@ -290,14 +354,25 @@ analyzeBtn.onclick = async () => {
     out.carry.textContent   = `${kin.carry_m.toFixed(1)} m`;
     out.nframes.textContent = `${kin.n}`;
     why.textContent = 'Done ✅';
-
-    Hm.delete();
   } catch (err) {
     console.error(err);
     log('Error: ' + (err && err.message ? err.message : String(err)));
     why.textContent = 'Error during analysis.';
   } finally {
     analyzeBtn.disabled = false;
+  }
+};
+
+/* ---- Preview analyzed overlay ---- */
+previewBtn.onclick = async () => {
+  if (!lastFrames.length || !lastCenters.length) return;
+  const vw = canvas.width, vh = canvas.height;
+  for(const c of lastCenters){
+    // draw corresponding frame idx (best-effort; fall back to last)
+    const f = lastFrames[c.idx] || lastFrames[lastFrames.length-1];
+    ctx.putImageData(f.img, 0, 0);
+    drawFrame([c.x, c.y]);
+    await new Promise(r => setTimeout(r, 50));
   }
 };
 
