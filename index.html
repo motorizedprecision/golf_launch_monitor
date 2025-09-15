@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>MP Launch Monitor</title>
+<style>
+  body { font-family: sans-serif; background: #111; color: #eee; margin: 0; padding: 1em; }
+  h1 { color: #ff725c; }
+  button,input,select { font-size: 16px; padding: 6px 10px; margin: 4px; }
+  video,canvas { width: 100%; max-width: 480px; background: #000; border: 1px solid #444; }
+  .stat { margin: 4px 0; }
+</style>
+</head>
+<body>
+<h1>Motorized Precision • Launch Monitor</h1>
+<input id="file" type="file" accept="video/*" />
+<button id="analyzeBtn" disabled>Analyze</button>
+<button id="clearBtn">Clear Points</button>
+<select id="markerSel">
+  <option value="letter">Letter 8.5x11 in</option>
+  <option value="a4">A4 210x297 mm</option>
+</select>
+<video id="video" playsinline controls></video>
+<canvas id="canvas" width="1920" height="1080"></canvas>
+<p>Tap 4 corners of your ground marker on the canvas before analyzing.</p>
+<div class="stat">Ball Speed: <span id="speed">–</span></div>
+<div class="stat">Launch: <span id="launch">–</span></div>
+<div class="stat">Azimuth: <span id="azimuth">–</span></div>
+<div class="stat">Carry (est.): <span id="carry">–</span></div>
+<script src="https://docs.opencv.org/4.x/opencv.js"></script>
+<script>
+let cvReady=false;
+window.Module={onRuntimeInitialized(){cvReady=true;maybeEnableAnalyze();}};
+const fileInput=document.getElementById('file');
+const video=document.getElementById('video');
+const canvas=document.getElementById('canvas');
+const ctx=canvas.getContext('2d');
+const analyzeBtn=document.getElementById('analyzeBtn');
+const clearBtn=document.getElementById('clearBtn');
+const markerSel=document.getElementById('markerSel');
+let clickedPts=[];
+const out={speed:document.getElementById('speed'),launch:document.getElementById('launch'),azimuth:document.getElementById('azimuth'),carry:document.getElementById('carry')};
+
+fileInput.onchange=async e=>{const f=e.target.files[0];if(!f)return;video.src=URL.createObjectURL(f);await video.play().catch(()=>{});video.pause();video.currentTime=0.05;await new Promise(r=>video.onseeked=r);drawFrame();clickedPts=[];maybeEnableAnalyze();};
+canvas.addEventListener('click',e=>{const r=canvas.getBoundingClientRect();const x=(e.clientX-r.left)*canvas.width/r.width;const y=(e.clientY-r.top)*canvas.height/r.height;if(clickedPts.length<4){clickedPts.push([x,y]);drawFrame();maybeEnableAnalyze();}});
+clearBtn.onclick=()=>{clickedPts=[];drawFrame();maybeEnableAnalyze();};
+function drawFrame(){const vw=video.videoWidth||1920,vh=video.videoHeight||1080;canvas.width=vw;canvas.height=vh;ctx.drawImage(video,0,0,vw,vh);ctx.fillStyle='#f33';clickedPts.forEach(([x,y])=>{ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();});}
+function maybeEnableAnalyze(){analyzeBtn.disabled=!(cvReady&&video.src&&clickedPts.length===4);}
+function paperMeters(){return markerSel.value==='a4'?[0.210,0.297]:[0.216,0.279];}
+function solveHomography(src4,dst4){const src=cv.matFromArray(4,1,cv.CV_32FC2,src4.flat());const dst=cv.matFromArray(4,1,cv.CV_32FC2,dst4.flat());const H=new cv.Mat();cv.findHomography(src,dst,H);src.delete();dst.delete();return H;}
+function applyH(H,pt){const[u,v]=pt;const h=H.data64F||H.data32F;const a=h[0]*u+h[1]*v+h[2],b=h[3]*u+h[4]*v+h[5],c=h[6]*u+h[7]*v+h[8];return[a/c,b/c];}
+async function extractFrames(n=10){const frames=[];let t=video.currentTime,dt=1/240;for(let i=0;i<n;i++){video.currentTime=t;await new Promise(r=>video.onseeked=r);drawFrame();frames.push(ctx.getImageData(0,0,canvas.width,canvas.height));t+=dt;}return frames;}
+function detectCenters(frames){const centers=[];let prev=null;for(const img of frames){let src=cv.matFromImageData(img);let g=new cv.Mat();cv.cvtColor(src,g,cv.COLOR_RGBA2GRAY);let d=new cv.Mat();if(prev)cv.absdiff(g,prev,d);else d=g.clone();cv.GaussianBlur(d,d,new cv.Size(5,5),0);cv.threshold(d,d,30,255,cv.THRESH_BINARY);const cs=new cv.MatVector(),h=new cv.Mat();cv.findContours(d,cs,h,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);let best=null,bs=-1;for(let i=0;i<cs.size();i++){const c=cs.get(i);const area=cv.contourArea(c);if(area<10||area>2000){c.delete();continue;}const m=cv.moments(c);const cx=m.m10/(m.m00+1e-9),cy=m.m01/(m.m00+1e-9);if(area>bs){bs=area;best={x:cx,y:cy};}c.delete();}if(best)centers.push(best);src.delete();if(prev)prev.delete();prev=g;}prev&&prev.delete();return centers;}
+function estimateKinematics(centers,H){const[W,Hm]=paperMeters();const pts=centers.map(c=>applyH(H,[c.x,c.y]));if(pts.length<2)return null;const dx=pts[1][0]-pts[0][0],dy=pts[1][1]-pts[0][1];const v=Math.hypot(dx,dy)/ (1/240);const theta=Math.atan2(-dy,dx);const phi=Math.atan2(dy,dx);const g=9.8;const carry=(v*v/g)*Math.sin(2*theta)*0.75;return{v0:v,theta,phi,carry};}
+analyzeBtn.onclick=async()=>{const[W,Hm]=paperMeters();const dst=[[0,0],[0,Hm],[W,Hm],[W,0]];const H=solveHomography(clickedPts,dst);const frames=await extractFrames();const centers=detectCenters(frames);if(centers.length<2){alert('No ball tracked');return;}const kin=estimateKinematics(centers,H);if(!kin){alert('Fail');return;}out.speed.textContent=kin.v0.toFixed(1)+' m/s';out.launch.textContent=(kin.theta*180/Math.PI).toFixed(1)+'°';out.azimuth.textContent=(kin.phi*180/Math.PI).toFixed(1)+'°';out.carry.textContent=kin.carry.toFixed(1)+' m';H.delete();};
+</script>
+</body>
+</html>
