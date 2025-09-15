@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Video Load Hotfix (ROI, 30 fps tuned)</title>
+<title>MP Launch Monitor — Trail Graphics (Video Load Hotfix)</title>
 <style>
   :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Video Load Hotfix</h1>
+<h1>Motorized Precision • Launch Monitor — Trail Graphics</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -53,7 +53,7 @@
       <option value="auto">Auto</option>
     </select>
   </label>
-  <label>Frames <input id="numFrames" type="number" value="150" min="6" max="600" style="width:90px"></label>
+  <label>Frames <input id="numFrames" type="number" value="150" min="6" max="900" style="width:90px"></label>
   <label>Δt (seek) <input id="deltaT" type="number" value="0.03333" step="0.0005" style="width:110px"><span class="status">≈1/30</span></label>
 </div>
 
@@ -61,6 +61,14 @@
   <button id="setRoiBtn">Set Ball ROI</button>
   <button id="clearRoiBtn">Clear ROI</button>
   <button id="clearPtsBtn">Clear Calib Pts</button>
+</div>
+
+<div class="row">
+  <label><input type="checkbox" id="showTrail" checked> Show trail</label>
+  <label>Trail length <input id="trailLen" type="number" value="200" min="10" max="1000" style="width:90px"></label>
+  <label>Trail thickness <input id="trailThick" type="number" value="3" min="1" max="8" style="width:80px"></label>
+  <label><input type="checkbox" id="showPred" checked> Predicted path</label>
+  <button id="exportPngBtn">Export PNG</button>
 </div>
 
 <div class="row">
@@ -78,7 +86,7 @@
 
 <video id="video" playsinline muted controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">Load a video, tap 4 tray/paper corners for scale, draw the Ball ROI box, then Analyze. This build adds a robust loader: waits for <i>loadedmetadata</i>/<i>canplay</i>/<i>seeked</i>, logs errors, and supports same-file reselect & drag‑drop.</p>
+<p class="status">Draw the Ball ROI box to restrict tracking. This build draws a persistent <b>trail</b> of the ball and an optional <b>predicted path</b> after analysis. Loader is resilient to Safari quirks.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -98,6 +106,7 @@
 <script src="https://docs.opencv.org/4.x/opencv.js"></script>
 
 <script>
+/* ---------- DOM ---------- */
 const fileInput = document.getElementById('file');
 const drop = document.getElementById('drop');
 const video = document.getElementById('video');
@@ -117,7 +126,11 @@ const resetBtn = document.getElementById('resetBtn');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
 const analyzeBtn = document.getElementById('analyzeBtn');
 const previewBtn = document.getElementById('previewBtn');
-const debugOverlay = document.createElement('input'); debugOverlay.type='checkbox'; debugOverlay.checked=true;
+const exportPngBtn = document.getElementById('exportPngBtn');
+const showTrail = document.getElementById('showTrail');
+const trailLen = document.getElementById('trailLen');
+const trailThick = document.getElementById('trailThick');
+const showPred = document.getElementById('showPred');
 const why = document.getElementById('whyDisabled');
 const logEl = document.getElementById('log');
 
@@ -129,31 +142,32 @@ const out = {
   nframes: document.getElementById('nframes')
 };
 
-let calibPts = []; // 4 pts for scale
+/* ---------- State ---------- */
+let calibPts = []; // 4 pts for scale plane
 let roiRect = null; // {x,y,w,h}
 let roiMode = false;
 let roiStart = null;
-let lastCenters = []; // for preview
+let lastCenters = []; // for preview & trail
 let lastFrames = [];  // for preview
-let objectURL = null; // revoke when resetting
-let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 30fps 406x720
+let objectURL = null;
+let trailPoints = []; // [{x,y}]
+let predictedPath = []; // [{x,y}] (image-plane)
+let lastH = null; // homography used for predicted path inversion
+let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 30fps
+let debugOverlay = true;
 
 function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
 
+/* ---------- Helpers ---------- */
 function waitForEvent(el, type, timeout=10000){
   return new Promise((resolve, reject)=>{
-    const done = () => { cleanup(); resolve(); };
-    const on = () => done();
+    const on = () => { cleanup(); resolve(); };
     const to = setTimeout(()=>{ cleanup(); reject(new Error(type+' timeout')); }, timeout);
     function cleanup(){ el.removeEventListener(type, on); clearTimeout(to); }
     el.addEventListener(type, on, { once:true });
   });
 }
-
-function cleanupObjectURL(){
-  if (objectURL) { URL.revokeObjectURL(objectURL); objectURL = null; }
-}
-
+function cleanupObjectURL(){ if (objectURL) { URL.revokeObjectURL(objectURL); objectURL = null; } }
 function resetApp(){
   try {
     cleanupObjectURL();
@@ -161,59 +175,59 @@ function resetApp(){
     video.removeAttribute('src'); video.load();
     fileInput.value = '';
     calibPts = []; roiRect = null; roiMode = false; roiStart = null;
-    lastCenters = []; lastFrames = [];
+    lastCenters = []; lastFrames = []; trailPoints = []; predictedPath = []; lastH = null;
     drawFrame();
     log('App reset');
   } catch(e){ log('Reset error: '+e.message); }
   maybeEnableAnalyze();
 }
-
 resetBtn.onclick = resetApp;
-
 clearCacheBtn.onclick = async ()=>{
   if (!('caches' in window)) { log('Cache API not available'); return; }
   const keys = await caches.keys();
   await Promise.all(keys.map(k=>caches.delete(k)));
   log('Cleared service worker caches. Hard reload the page to ensure fresh code.');
 };
+exportPngBtn.onclick = () => {
+  try {
+    const a = document.createElement('a');
+    a.download = 'mp-launch-monitor-overlay.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  } catch(e) { log('Export PNG failed: '+e.message); }
+};
 
 video.addEventListener('error', () => {
   const e = video.error;
-  if (!e) { log('Video error (no details)'); return; }
   const map = { 1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED' };
-  log(`Video error: ${map[e.code]||e.code} (${e.message||'no message'})`);
+  log(`Video error: ${e? (map[e.code]||e.code) : 'unknown'}`);
 });
-
 ['loadstart','loadedmetadata','loadeddata','canplay','canplaythrough','stalled','suspend','emptied','waiting'].forEach(ev=>{
   video.addEventListener(ev, ()=> log(`video event: ${ev}, readyState=${video.readyState}`));
 });
 
+/* ---------- UI reactions ---------- */
 markerSel.onchange = () => {
   const isCustom = markerSel.value === 'custom';
   customW.style.display = isCustom ? '' : 'none';
   customH.style.display = isCustom ? '' : 'none';
   maybeEnableAnalyze();
 };
-
-/* ---- File & Drop loading ---- */
 fileInput.onchange = async (e) => {
   try {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     if (!f.type || !f.type.startsWith('video/')) { log('Not a video file'); return; }
-    // allow same-file reselect next time
     fileInput.blur(); setTimeout(()=>{ fileInput.value=''; }, 0);
     await loadVideoFile(f);
   } catch(err){ log('Load error: '+err.message); }
 };
-
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add('drag'); }));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove('drag'); }));
 drop.addEventListener('drop', async (e)=>{
   const f = e.dataTransfer.files && e.dataTransfer.files[0];
   if (f) await loadVideoFile(f);
 });
-
 async function loadVideoFile(file){
   try {
     log(`Loading: ${file.name} (${Math.round(file.size/1024)} kB)`);
@@ -221,30 +235,25 @@ async function loadVideoFile(file){
     objectURL = URL.createObjectURL(file);
     video.muted = true; video.playsInline = true;
     video.src = objectURL;
-    // Wait for metadata then canplay
     await waitForEvent(video,'loadedmetadata',15000);
-    log(`loadedmetadata: ${video.videoWidth}×${video.videoHeight}, duration≈${video.duration.toFixed(2)}s`);
+    log(`loadedmetadata: ${video.videoWidth}×${video.videoHeight}, duration≈${(video.duration||0).toFixed(2)}s`);
     drawFrame();
-    // Some Safari builds need a play() before canplay resolves
     try { await video.play(); } catch(_){}
     await waitForEvent(video,'canplay',15000).catch(()=>{});
     video.pause();
-    // Seek to first usable frame
     video.currentTime = Math.min(0.03, Math.max(0, (video.duration||0) * 0.01));
     await waitForEvent(video,'seeked',15000);
     drawFrame();
-    // Set detection area bounds from resolution
     const area = Math.max(1, (video.videoWidth||1920) * (video.videoHeight||1080));
     const minA = Math.max(6, Math.floor(area * minAreaFrac));
     const maxA = Math.max(minA+1, Math.floor(area * maxAreaFrac));
     log(`Detection area bounds: min≈${minA}, max≈${maxA}`);
     window.MP_DET = {minA, maxA};
-    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[];
+    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[]; trailPoints=[]; predictedPath=[]; lastH=null;
   } finally {
     maybeEnableAnalyze();
   }
 }
-
 primeBtn.onclick = async () => {
   try {
     video.muted = true;
@@ -253,12 +262,10 @@ primeBtn.onclick = async () => {
     video.pause();
     log('Autoplay primed (user gesture → play/pause)');
     maybeEnableAnalyze();
-  } catch(e) {
-    log('Autoplay prime failed: ' + e.message);
-  }
+  } catch(e) { log('Autoplay prime failed: ' + e.message); }
 };
 
-/* ---- Canvas interactions ---- */
+/* ---------- Canvas interactions ---------- */
 canvas.addEventListener('pointerdown', (e) => {
   const {x,y} = canvasXY(e);
   if (roiMode) { roiStart = {x,y}; }
@@ -275,20 +282,53 @@ function canvasXY(e){ const r = canvas.getBoundingClientRect(); const x = (e.cli
 function tempRect(a,b){ return normRect(a,b); }
 function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
 
-/* ---- Drawing ---- */
+/* ---------- Drawing ---------- */
 function drawFrame(drawTempRect=null) {
   const vw = video.videoWidth || 1920, vh = video.videoHeight || 1080;
   canvas.width = vw; canvas.height = vh;
   ctx.drawImage(video, 0, 0, vw, vh);
   ctx.save();
+  // calibration hull
   ctx.fillStyle = '#ff725c'; ctx.strokeStyle = '#ff725c'; ctx.lineWidth = 3;
   calibPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
   if (calibPts.length === 4) { ctx.beginPath(); ctx.moveTo(calibPts[0][0], calibPts[0][1]); for (let i=1;i<4;i++) ctx.lineTo(calibPts[i][0], calibPts[i][1]); ctx.closePath(); ctx.stroke(); }
+  // ROI
   if (roiRect) { ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h); }
+  // Trail (persistent)
+  if (showTrail.checked && trailPoints.length>1) drawTrail(trailPoints, Number(trailThick.value||3));
+  // Predicted path
+  if (showPred.checked && predictedPath.length>1) drawPredicted(predictedPath);
+  // temp rect
   if (drawTempRect) { ctx.setLineDash([6,6]); ctx.strokeStyle = '#4cd964aa'; ctx.lineWidth = 2; ctx.strokeRect(drawTempRect.x, drawTempRect.y, drawTempRect.w, drawTempRect.h); ctx.setLineDash([]); }
   ctx.restore();
 }
+function drawTrail(pts, thick){
+  const n = Math.min(pts.length, Number(trailLen.value||200));
+  const start = pts.length - n;
+  for(let i=start+1;i<pts.length;i++){
+    const p0 = pts[i-1], p1 = pts[i];
+    const a = (i-start)/n; // 0..1
+    ctx.strokeStyle = `rgba(76, 217, 100, ${Math.max(0.12, Math.min(0.85, a))})`;
+    ctx.lineWidth = Math.max(1, thick * (0.6 + 0.4*a));
+    ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+  }
+  // tip
+  const tip = pts[pts.length-1];
+  ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(tip.x, tip.y, Math.max(6, thick+2), 0, Math.PI*2); ctx.fill();
+}
+function drawPredicted(pts){
+  ctx.save();
+  ctx.setLineDash([8,6]); ctx.strokeStyle = 'rgba(255,114,92,0.85)'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const tip = pts[pts.length-1];
+  ctx.fillStyle = 'rgba(255,114,92,0.9)'; ctx.beginPath(); ctx.arc(tip.x, tip.y, 5, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
 
+/* ---------- Enable/Status ---------- */
 function maybeEnableAnalyze() {
   const okCV = window.cvReady && typeof cv !== 'undefined';
   const okVid = !!video.src && (video.readyState >= 2);
@@ -300,7 +340,7 @@ function maybeEnableAnalyze() {
   why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • CalibPoints ${calibPts.length}/4 • ROI: ${okROI?'✅':'❌'} • rVFC: ${hasRVFC ? '✅' : '❌'}`;
 }
 
-/* ---- Calibration geometry ---- */
+/* ---------- Calibration & Transforms ---------- */
 function calibMeters() {
   if (markerSel.value === 'tray')   return [0.34, 0.25];
   if (markerSel.value === 'letter') return [0.2159, 0.2794];
@@ -317,29 +357,61 @@ function solveHomography(src4, dst4) {
   return H;
 }
 function applyH(H, pt) { const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
+function invertH(H){
+  const dst = new cv.Mat();
+  cv.invert(H, dst, cv.DECOMP_LU);
+  return dst;
+}
+function applyHInv(Hinv, pt){ const [x,y]=pt; const h = Hinv.data64F||Hinv.data32F; const a=h[0]*x + h[1]*y + h[2], b=h[3]*x + h[4]*y + h[5], c=h[6]*x + h[7]*y + h[8]; return [a/c, b/c]; }
 
-/* ---- Frame extraction ---- */
+/* ---------- Frame extraction ---------- */
 async function extractFramesSeek(n=150, dt=0.03333){
   const frames=[]; let t=video.currentTime; const dur = video.duration || 1e9;
-  for(let i=0;i<n;i++){ if (t > dur) break; video.currentTime = t; await new Promise(res=>{ video.onseeked = res; }); drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i}); why.textContent = `Sampling (seek): ${i+1}/${n}`; await new Promise(requestAnimationFrame); t += dt; }
+  for(let i=0;i<n;i++){
+    if (t > dur) break;
+    video.currentTime = t;
+    await new Promise(res=>{ video.onseeked = res; });
+    drawFrame();
+    frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i});
+    why.textContent = `Sampling (seek): ${i+1}/${n}`;
+    await new Promise(requestAnimationFrame);
+    t += dt;
+  }
   return frames;
 }
 async function extractFramesRVFC(n=150){
   const frames=[]; let count=0; let handle=0;
   const onframe = (now, meta) => {
-    try{ drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count}); why.textContent = `Sampling (rVFC): ${count+1}/${n}`; count++; if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; } handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe)); }catch(e){ console.error(e); done(e); }
+    try{
+      drawFrame();
+      frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count});
+      why.textContent = `Sampling (rVFC): ${count+1}/${n}`;
+      count++;
+      if (count >= n) {
+        video.pause();
+        cancelAnimationFrame(handle);
+        done();
+        return;
+      }
+      handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
+    }catch(e){ console.error(e); done(e); }
   };
-  let doneResolve, doneReject; const done = (err) => { err ? doneReject(err) : doneResolve(); }; const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
-  video.muted = true; video.playbackRate = 0.1; try { await video.play(); } catch(_){}
+  let doneResolve, doneReject;
+  const done = (err) => { err ? doneReject(err) : doneResolve(); };
+  const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
+  video.muted = true; video.playbackRate = 0.1;
+  try { await video.play(); } catch(_){}
   handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
-  await p; return frames;
+  await p;
+  return frames;
 }
 
-/* ---- Detection in ROI with area gates ---- */
+/* ---------- Detection (ROI) + Trail drawing ---------- */
 function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
   const minA = (window.MP_DET && window.MP_DET.minA) || 8;
   const maxA = (window.MP_DET && window.MP_DET.maxA) || 600;
+  trailPoints = []; // reset trail
   for(const f of frames){
     let src = cv.matFromImageData(f.img);
     let grayFull = new cv.Mat(); cv.cvtColor(src,grayFull,cv.COLOR_RGBA2GRAY);
@@ -368,7 +440,10 @@ function detectCenters(frames, roi){
     }
     if(best) {
       centers.push(best);
-      if (debugOverlay.checked) { drawFrame(); ctx.save(); ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roi.x, roi.y, roi.w, roi.h); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(best.x, best.y, 8, 0, Math.PI*2); ctx.fill(); ctx.restore(); }
+      trailPoints.push({x:best.x, y:best.y});
+      if (showTrail.checked) { drawFrame(); drawTrail(trailPoints, Number(trailThick.value||3)); }
+      // draw current ball marker
+      ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(best.x, best.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
     }
     src.delete(); grayFull.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete();
     if (prevGray) prevGray.delete();
@@ -379,10 +454,9 @@ function detectCenters(frames, roi){
   return centers;
 }
 
-/* ---- Kinematics ---- */
+/* ---------- Kinematics & Predicted path ---------- */
 function estimateCarry(v0, theta, drag=0.75){ const g=9.80665; return (v0*v0/g)*Math.sin(2*theta)*drag; }
 function fitKinematics(centers, H){
-  function applyH(H, pt){ const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
   const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t]));
   const i0=0, i2=Math.min(2, ground.length-1);
   if (i2 <= i0) return null;
@@ -395,20 +469,47 @@ function fitKinematics(centers, H){
   const phi = Math.atan2(vy, vx);
   const v0 = vxy / Math.cos(theta);
   const carry_m = estimateCarry(v0, theta, 0.75);
-  return { v0, theta, phi, carry_m, n: centers.length };
+  return { v0, theta, phi, carry_m, n: centers.length, vx, vy, start: ground[0] };
+}
+function computePredictedPath(H, centers, kin){
+  try {
+    if (!centers.length || !H) return [];
+    const Hinv = invertH(H);
+    lastH = H.clone ? H.clone() : H; // keep for debug
+    const pts = [];
+    const dt = 0.03333; // draw ~30 fps
+    const steps = 120;   // ~4 s
+    const g = 9.80665;
+    // start at first ground point
+    const startPix = [centers[0].x, centers[0].y];
+    const startGround = applyH(H, startPix);
+    const v0 = kin.v0, theta = kin.theta, phi = kin.phi;
+    const vx = v0 * Math.cos(theta) * Math.cos(phi);
+    const vy = v0 * Math.cos(theta) * Math.sin(phi);
+    const vz0 = v0 * Math.sin(theta); // upward
+    for(let i=0;i<steps;i++){
+      const t = i*dt;
+      const x = startGround[0] + vx*t;
+      const y = startGround[1] + vy*t;
+      // vertical z just for visualization (no real camera project), we can ignore or flatten
+      const img = applyHInv(Hinv, [x,y]);
+      pts.push({x:img[0], y:img[1]});
+    }
+    Hinv.delete && Hinv.delete();
+    return pts;
+  } catch(e){ console.warn('predicted path error', e); return []; }
 }
 
-/* ---- Analyze ---- */
+/* ---------- Analyze ---------- */
 analyzeBtn.onclick = async () => {
   try {
     analyzeBtn.disabled = true; previewBtn.disabled = true;
+    predictedPath = []; // reset
     why.textContent = 'Analyzing: solving homography…';
     const [W,H] = calibMeters();
     const dst = [[0,0],[0,H],[W,H],[W,0]];
     const Hm = solveHomography(calibPts, dst);
-    log('Homography solved from 4 points → meters');
-
-    const n = Math.max(6, Math.min(600, parseInt(numFramesEl.value||'150',10)));
+    const n = Math.max(6, Math.min(900, parseInt(numFramesEl.value||'150',10)));
     const method = methodSel.value;
     let frames;
     if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback && n <= 240)) {
@@ -425,16 +526,22 @@ analyzeBtn.onclick = async () => {
     lastCenters = centers.slice();
     previewBtn.disabled = (centers.length === 0);
 
-    if (centers.length < 4) { why.textContent = 'Could not track — expand ROI, brighten light, or adjust frames/Δt.'; analyzeBtn.disabled = false; return; }
+    if (centers.length < 4) { why.textContent = 'Could not track — expand ROI, brighten light, or adjust frames/Δt.'; analyzeBtn.disabled = false; Hm.delete(); return; }
     why.textContent = 'Fitting short-arc trajectory…';
     const kin = fitKinematics(centers, Hm);
-    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; return; }
+    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; Hm.delete(); return; }
 
     out.speed.textContent   = `${kin.v0.toFixed(1)} m/s (${(kin.v0*2.237).toFixed(1)} mph)`;
     out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
     out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
     out.carry.textContent   = `${(kin.carry_m.toFixed(1))} m`;
     out.nframes.textContent = `${(kin.n)}`;
+    why.textContent = 'Drawing predicted path…';
+    // Predicted ground path → image
+    predictedPath = computePredictedPath(Hm, centers, kin);
+    // Redraw with predicted path
+    drawFrame();
+    Hm.delete();
     why.textContent = 'Done ✅';
   } catch (err) {
     console.error(err);
@@ -445,34 +552,34 @@ analyzeBtn.onclick = async () => {
   }
 };
 
-/* ---- Preview analyzed overlay ---- */
+/* ---------- Preview ---------- */
 previewBtn.onclick = async () => {
   if (!lastFrames.length || !lastCenters.length) return;
-  for(const c of lastCenters){
+  for(let i=0;i<lastCenters.length;i++){
+    const c = lastCenters[i];
     const f = lastFrames[c.idx] || lastFrames[lastFrames.length-1];
     ctx.putImageData(f.img, 0, 0);
-    drawFrame();
-    if (roiRect) { ctx.save(); ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h); ctx.restore(); }
-    ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(c.x, c.y, 8, 0, Math.PI*2); ctx.fill(); ctx.restore();
+    drawFrame(); // draws ROI, existing trail & predicted
+    // Draw trail up to i
+    const subTrail = lastCenters.slice(0, i+1).map(p=>({x:p.x,y:p.y}));
+    drawTrail(subTrail, Number(trailThick.value||3));
+    // Current marker
+    ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(c.x, c.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
     await new Promise(r => setTimeout(r, 30));
   }
 };
 
-/* Keep status fresh after visibility changes */
+/* ---------- Status refresh ---------- */
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeEnableAnalyze(); });
 
-function maybeEnableAnalyze() {
-  const okCV = window.cvReady && typeof cv !== 'undefined';
-  const okVid = !!video.src && (video.readyState >= 2);
-  const okPts = calibPts.length === 4;
-  const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
-  const hasRVFC = !!video.requestVideoFrameCallback;
-  analyzeBtn.disabled = !(okCV && okVid && okPts && okROI);
-  previewBtn.disabled = lastCenters.length === 0;
-  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • CalibPoints ${calibPts.length}/4 • ROI: ${okROI?'✅':'❌'} • rVFC: ${hasRVFC ? '✅' : '❌'}`;
+/* ---------- Utility drawing ---------- */
+function drawFrameRectAndDot(rr, dot){
+  drawFrame();
+  if (rr) { ctx.save(); ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(rr.x, rr.y, rr.w, rr.h); ctx.restore(); }
+  if (dot) { ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(dot[0], dot[1], 7, 0, Math.PI*2); ctx.fill(); ctx.restore(); }
 }
 
-/* Service worker */
+/* ---------- Service worker ---------- */
 if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('./sw.js'); } catch(e){} }
 </script>
 </body>
