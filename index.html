@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Mac Safari (Homography Hotfix)</title>
+<title>MP Launch Monitor — Mac Safari (ROI + 240)</title>
 <style>
-  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; }
+  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
   h1 { color: var(--brand); font-size: 20px; margin: 0 0 12px 0; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
@@ -20,10 +20,11 @@
   .status { color: var(--muted); font-size: 14px; }
   #log { white-space: pre-wrap; font-size: 12px; color: #cbd5e1; background: #0b0d12; border:1px solid var(--line); border-radius:10px; padding:10px; max-width: 560px; }
   label { display:flex; align-items:center; gap:8px; }
+  .badge { border:1px solid var(--line); border-radius: 999px; padding: 4px 8px; font-size: 12px; color: var(--muted); }
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Mac Safari (Homography Hotfix)</h1>
+<h1>Motorized Precision • Launch Monitor — Mac Safari (ROI + 240)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -36,6 +37,7 @@
   <input id="customW" type="number" step="0.001" placeholder="W (m)" style="width:110px;display:none">
   <input id="customH" type="number" step="0.001" placeholder="D (m)" style="width:110px;display:none">
 </div>
+
 <div class="row">
   <label>Method
     <select id="method">
@@ -44,22 +46,29 @@
       <option value="seek">Time‑step</option>
     </select>
   </label>
-  <label>Frames <input id="numFrames" type="number" value="16" min="6" max="60" style="width:90px"></label>
+  <label>Frames <input id="numFrames" type="number" value="240" min="6" max="600" style="width:90px"></label>
   <label>Δt (seek) <input id="deltaT" type="number" value="0.00417" step="0.0005" style="width:110px"><span class="status">≈1/240</span></label>
+  <span class="badge">Scale = tray/paper only • Ball uses ROI</span>
 </div>
+
 <div class="row">
-  <button id="clearBtn">Clear Points</button>
+  <button id="setRoiBtn">Set Ball ROI</button>
+  <button id="clearRoiBtn">Clear ROI</button>
+  <button id="clearPtsBtn">Clear Calib Pts</button>
   <button id="primeBtn">Prime Autoplay</button>
   <label><input type="checkbox" id="debugOverlay" checked> Overlay</label>
+</div>
+
+<div class="row">
   <button id="analyzeBtn" class="primary" disabled>Analyze</button>
   <button id="previewBtn" disabled>Preview overlay</button>
 </div>
 
-<div class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • Points 0/4 • rVFC: ?</div>
+<div class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • CalibPoints 0/4 • ROI: ❌ • rVFC: ?</div>
 
 <video id="video" playsinline muted controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">Tap the 4 corners of your tray/paper on the canvas. Analyze steps frames; the canvas/overlay and log show progress.</p>
+<p class="status">Step 1: Tap 4 corners of tray/paper for scale. Step 2: Click <b>Set Ball ROI</b> and drag a box around the ball’s flight region. Analyze samples up to N frames and restricts detection to your ROI.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -92,7 +101,9 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const analyzeBtn = document.getElementById('analyzeBtn');
 const previewBtn = document.getElementById('previewBtn');
-const clearBtn = document.getElementById('clearBtn');
+const clearPtsBtn = document.getElementById('clearPtsBtn');
+const setRoiBtn = document.getElementById('setRoiBtn');
+const clearRoiBtn = document.getElementById('clearRoiBtn');
 const primeBtn = document.getElementById('primeBtn');
 const markerSel = document.getElementById('markerSel');
 const customW = document.getElementById('customW');
@@ -112,7 +123,10 @@ const out = {
   nframes: document.getElementById('nframes')
 };
 
-let clickedPts = []; // four [x,y] points
+let calibPts = []; // four [x,y] for scale plane
+let roiRect = null; // {x,y,w,h}
+let roiMode = false;
+let roiStart = null;
 let lastCenters = []; // for preview
 let lastFrames = [];  // for preview
 
@@ -125,6 +139,7 @@ markerSel.onchange = () => {
   maybeEnableAnalyze();
 };
 
+/* ---- Video load ---- */
 fileInput.onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -135,7 +150,7 @@ fileInput.onchange = async (e) => {
   video.pause();
   video.currentTime = 0.03;
   await new Promise(res => { video.onseeked = res; });
-  drawFrame(); clickedPts = []; lastCenters=[]; lastFrames=[];
+  drawFrame(); calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[];
   maybeEnableAnalyze();
 };
 
@@ -152,39 +167,72 @@ primeBtn.onclick = async () => {
   }
 };
 
-video.addEventListener('timeupdate', () => { drawFrame(); });
-
+/* ---- Canvas interactions ---- */
 canvas.addEventListener('pointerdown', (e) => {
-  const r = canvas.getBoundingClientRect();
-  const x = (e.clientX - r.left) * canvas.width / r.width;
-  const y = (e.clientY - r.top) * canvas.height / r.height;
-  if (clickedPts.length < 4) {
-    clickedPts.push([x,y]);
+  const {x,y} = canvasXY(e);
+  if (roiMode) {
+    roiStart = {x,y};
+  } else if (calibPts.length < 4) {
+    calibPts.push([x,y]);
     drawFrame();
-    log(`Point ${clickedPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`);
+    log(`Calib point ${calibPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`);
     maybeEnableAnalyze();
   }
 });
+canvas.addEventListener('pointermove', (e) => {
+  if (!roiMode || !roiStart) return;
+  drawFrame(tempRect(roiStart, canvasXY(e)));
+});
+canvas.addEventListener('pointerup', (e) => {
+  if (!roiMode || !roiStart) return;
+  roiRect = normRect(roiStart, canvasXY(e));
+  roiStart = null; roiMode = false;
+  drawFrame();
+  log(`ROI set: x=${roiRect.x|0}, y=${roiRect.y|0}, w=${roiRect.w|0}, h=${roiRect.h|0}`);
+  maybeEnableAnalyze();
+});
 
-clearBtn.onclick = () => { clickedPts = []; drawFrame(); log('Cleared all points'); maybeEnableAnalyze(); };
+setRoiBtn.onclick = () => { roiMode = true; log('Draw ROI on canvas (drag)...'); };
+clearRoiBtn.onclick = () => { roiRect = null; drawFrame(); log('Cleared ROI'); maybeEnableAnalyze(); };
+clearPtsBtn.onclick = () => { calibPts = []; drawFrame(); log('Cleared calibration points'); maybeEnableAnalyze(); };
 
-function drawFrame(overlayDot=null) {
+function canvasXY(e){
+  const r = canvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * canvas.width / r.width;
+  const y = (e.clientY - r.top) * canvas.height / r.height;
+  return {x,y};
+}
+function tempRect(a,b){ return normRect(a,b); }
+function normRect(a,b){
+  const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y);
+  const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y);
+  return {x,y,w,h};
+}
+
+/* ---- Drawing ---- */
+function drawFrame(drawTempRect=null) {
   const vw = video.videoWidth || 1920, vh = video.videoHeight || 1080;
   canvas.width = vw; canvas.height = vh;
   ctx.drawImage(video, 0, 0, vw, vh);
-  // draw points
+  // calibration points
   ctx.save();
   ctx.fillStyle = '#ff725c'; ctx.strokeStyle = '#ff725c'; ctx.lineWidth = 3;
-  clickedPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
-  if (clickedPts.length === 4) {
+  calibPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
+  if (calibPts.length === 4) {
     ctx.beginPath();
-    ctx.moveTo(clickedPts[0][0], clickedPts[0][1]);
-    for (let i=1;i<4;i++) ctx.lineTo(clickedPts[i][0], clickedPts[i][1]);
+    ctx.moveTo(calibPts[0][0], calibPts[0][1]);
+    for (let i=1;i<4;i++) ctx.lineTo(calibPts[i][0], calibPts[i][1]);
     ctx.closePath(); ctx.stroke();
   }
-  if (debugOverlay.checked && overlayDot) {
-    ctx.fillStyle = '#4cd964';
-    ctx.beginPath(); ctx.arc(overlayDot[0], overlayDot[1], 8, 0, Math.PI*2); ctx.fill();
+  // ROI rect
+  if (roiRect) {
+    ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3;
+    ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h);
+  }
+  if (drawTempRect) {
+    ctx.setLineDash([6,6]); ctx.strokeStyle = '#4cd964aa'; ctx.lineWidth = 2;
+    ctx.strokeRect(drawTempRect.x, drawTempRect.y, drawTempRect.w, drawTempRect.h);
+    ctx.setLineDash([]);
   }
   ctx.restore();
 }
@@ -192,11 +240,12 @@ function drawFrame(overlayDot=null) {
 function maybeEnableAnalyze() {
   const okCV = window.cvReady && typeof cv !== 'undefined';
   const okVid = !!video.src && (video.readyState >= 2);
-  const okPts = clickedPts.length === 4;
+  const okPts = calibPts.length === 4;
+  const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
   const hasRVFC = !!video.requestVideoFrameCallback;
-  analyzeBtn.disabled = !(okCV && okVid && okPts);
+  analyzeBtn.disabled = !(okCV && okVid && okPts && okROI);
   previewBtn.disabled = lastCenters.length === 0;
-  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • Points ${clickedPts.length}/4 • rVFC: ${hasRVFC ? '✅' : '❌'}`;
+  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • CalibPoints ${calibPts.length}/4 • ROI: ${okROI?'✅':'❌'} • rVFC: ${hasRVFC ? '✅' : '❌'}`;
 }
 
 /* ---- Calibration geometry ---- */
@@ -211,10 +260,9 @@ function calibMeters() {
   return [0.2159, 0.2794];
 }
 function solveHomography(src4, dst4) {
-  // FIX: OpenCV.js returns a Mat; do not pass an output Mat as an argument.
   const src = cv.matFromArray(4,1,cv.CV_32FC2, src4.flat());
   const dst = cv.matFromArray(4,1,cv.CV_32FC2, dst4.flat());
-  const H = cv.findHomography(src, dst, cv.RANSAC, 5.0); // return Mat
+  const H = cv.findHomography(src, dst, cv.RANSAC, 5.0);
   src.delete(); dst.delete();
   if (!H || H.rows === 0 || H.cols === 0) throw new Error('Homography failed (empty).');
   return H;
@@ -227,9 +275,10 @@ function applyH(H, pt) {
 }
 
 /* ---- Frame extraction ---- */
-async function extractFramesSeek(n=16, dt=1/240){
-  const frames=[]; let t=video.currentTime;
+async function extractFramesSeek(n=240, dt=1/240){
+  const frames=[]; let t=video.currentTime; const dur = video.duration || 1e9;
   for(let i=0;i<n;i++){
+    if (t > dur) break;
     video.currentTime = t;
     await new Promise(res=>{ video.onseeked = res; });
     drawFrame();
@@ -240,10 +289,8 @@ async function extractFramesSeek(n=16, dt=1/240){
   }
   return frames;
 }
-async function extractFramesRVFC(n=16){
-  const frames=[];
-  let count=0;
-  let handle=0;
+async function extractFramesRVFC(n=240){
+  const frames=[]; let count=0; let handle=0;
   const onframe = (now, meta) => {
     try{
       drawFrame();
@@ -257,10 +304,7 @@ async function extractFramesRVFC(n=16){
         return;
       }
       handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
-    }catch(e){
-      console.error(e);
-      done(e);
-    }
+    }catch(e){ console.error(e); done(e); }
   };
   let doneResolve, doneReject;
   const done = (err) => { err ? doneReject(err) : doneResolve(); };
@@ -272,12 +316,33 @@ async function extractFramesRVFC(n=16){
   return frames;
 }
 
-/* ---- Detection ---- */
-function detectCenters(frames){
+/* ---- Detection restricted to ROI + simple Kalman gating ---- */
+function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
-  for(const f of frames){
+  // Simple CV Kalman: state [x,y,vx,vy]
+  const kf = new cv.KalmanFilter(4,2,0);
+  let dt0 = (frames.length>1) ? Math.max(1e-4, (frames[1].t - frames[0].t)) : (1/240);
+  kf.transitionMatrix = cv.matFromArray(4,4,cv.CV_32F,[1,0,dt0,0, 0,1,0,dt0, 0,0,1,0, 0,0,0,1]);
+  kf.measurementMatrix = cv.matFromArray(2,4,cv.CV_32F,[1,0,0,0, 0,1,0,0]);
+  cv.setIdentity(kf.processNoiseCov, new cv.Scalar(1e-2));
+  cv.setIdentity(kf.measurementNoiseCov, new cv.Scalar(3e-1));
+  cv.setIdentity(kf.errorCovPost, new cv.Scalar(1));
+  let hasInit=false;
+  let predicted=[roi.x+roi.w/2, roi.y+roi.h/2];
+
+  for(let fi=0; fi<frames.length; fi++){
+    const f = frames[fi];
+    const dt = (fi>0)? Math.max(1e-4, f.t - frames[fi-1].t) : dt0;
+    // Update transition for variable dt
+    kf.transitionMatrix.data32F.set([1,0,dt,0, 0,1,0,dt, 0,0,1,0, 0,0,0,1]);
+    // Build grayscale full and ROI
     let src = cv.matFromImageData(f.img);
-    let gray = new cv.Mat(); cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+    let grayFull = new cv.Mat(); cv.cvtColor(src,grayFull,cv.COLOR_RGBA2GRAY);
+    const rect = new cv.Rect(Math.max(0,roi.x|0), Math.max(0,roi.y|0),
+                             Math.min(grayFull.cols - Math.max(0,roi.x|0), roi.w|0),
+                             Math.min(grayFull.rows - Math.max(0,roi.y|0), roi.h|0));
+    if (rect.width<=2 || rect.height<=2){ src.delete(); grayFull.delete(); break; }
+    let gray = grayFull.roi(rect);
     let work = new cv.Mat();
     if(prevGray){ cv.absdiff(gray,prevGray,work); } else { work = gray.clone(); }
     cv.GaussianBlur(work,work,new cv.Size(3,3),0);
@@ -291,23 +356,61 @@ function detectCenters(frames){
       if(area<12 || area>2500){ c.delete(); continue; }
       const m = cv.moments(c,true);
       let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
-      const rect = cv.boundingRect(c);
-      const circ = Math.min(rect.width,rect.height)/Math.max(rect.width,rect.height);
-      const score = circ + Math.min(1, area/250.0);
+      // Convert ROI coords → image coords
+      cx += rect.x; cy += rect.y;
+      // Score: near-circular + proximity to predicted
+      const rectB = cv.boundingRect(c);
+      const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
+      const dx = cx - predicted[0], dy = cy - predicted[1];
+      const dist = Math.hypot(dx,dy);
+      const score = circ + Math.min(1, area/250.0) + (dist>0 ? (1/ (1+dist/50)) : 1.5);
       if(score>bestScore){ bestScore=score; best={x:cx,y:cy,t:f.t, idx:f.idx}; }
       c.delete();
     }
-    if(best) {
-      centers.push(best);
-      if (debugOverlay.checked) { drawFrame([best.x, best.y]); }
+    // Kalman update
+    if(!hasInit){
+      kf.statePost = cv.matFromArray(4,1,cv.CV_32F,[best?best.x:predicted[0], best?best.y:predicted[1], 0,0]);
+      hasInit=true;
     }
-    src.delete(); gray.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete();
+    const pred = kf.predict();
+    predicted = [pred.data32F[0], pred.data32F[1]];
+
+    if(best){
+      const meas = cv.matFromArray(2,1,cv.CV_32F,[best.x,best.y]);
+      const corr = kf.correct(meas);
+      const x = corr.data32F[0], y = corr.data32F[1];
+      centers.push({x,y,t:f.t, idx:f.idx});
+      meas.delete(); corr.delete();
+      if (debugOverlay.checked) drawFrameRectAndDot(roiRect, [x,y]);
+    } else {
+      // No detection: keep prediction as a weak measurement
+      const meas = cv.matFromArray(2,1,cv.CV_32F,[predicted[0],predicted[1]]);
+      const corr = kf.correct(meas);
+      const x = corr.data32F[0], y = corr.data32F[1];
+      centers.push({x,y,t:f.t, idx:f.idx});
+      meas.delete(); corr.delete();
+      if (debugOverlay.checked) drawFrameRectAndDot(roiRect, [x,y]);
+    }
+    // Prepare prevGray
     if (prevGray) prevGray.delete();
-    prevGray = cv.matFromImageData(f.img); cv.cvtColor(prevGray,prevGray,cv.COLOR_RGBA2GRAY);
-    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length}`;
+    prevGray = new cv.Mat(); gray.copyTo(prevGray);
+    // Cleanup
+    src.delete(); gray.delete(); grayFull.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete(); pred.delete();
   }
   if (prevGray) prevGray.delete();
   return centers;
+}
+
+function drawFrameRectAndDot(rr, dot){
+  drawFrame();
+  if (rr) {
+    ctx.save();
+    ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3;
+    ctx.strokeRect(rr.x, rr.y, rr.w, rr.h);
+    ctx.fillStyle = '#4cd964';
+    ctx.beginPath(); ctx.arc(dot[0], dot[1], 8, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
 }
 
 /* ---- Kinematics ---- */
@@ -322,7 +425,7 @@ function fitKinematics(centers, H){
   const vy = (ground[i2][1]-ground[i0][1]) / dt;
   const vxy = Math.hypot(vx,vy);
   const dy_img = centers[i2].y - centers[i0].y;
-  const theta = Math.atan2(-dy_img, vxy*40); // heuristic scale
+  const theta = Math.atan2(-dy_img, vxy*40); // heuristic
   const phi = Math.atan2(vy, vx);
   const v0 = vxy / Math.cos(theta);
   const carry_m = estimateCarry(v0, theta, 0.75);
@@ -336,10 +439,10 @@ analyzeBtn.onclick = async () => {
     why.textContent = 'Analyzing: solving homography…';
     const [W,H] = calibMeters();
     const dst = [[0,0],[0,H],[W,H],[W,0]];
-    const Hm = solveHomography(clickedPts, dst);
+    const Hm = solveHomography(calibPts, dst);
     log('Homography solved from 4 points → meters');
 
-    const n = Math.max(6, Math.min(60, parseInt(numFramesEl.value||'16',10)));
+    const n = Math.max(6, Math.min(600, parseInt(numFramesEl.value||'240',10)));
     const method = methodSel.value;
     let frames;
     if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback)) {
@@ -351,13 +454,13 @@ analyzeBtn.onclick = async () => {
     log(`Extracted ${frames.length} frames via ${method}`);
     lastFrames = frames;
 
-    const centers = detectCenters(frames);
-    log(`Detections: ${centers.length} candidate ball positions`);
+    const centers = detectCenters(frames, roiRect || {x:0,y:0,w:canvas.width,h:canvas.height});
+    log(`Tracker outputs: ${centers.length} positions`);
     lastCenters = centers.slice();
     previewBtn.disabled = (centers.length === 0);
 
     if (centers.length < 4) {
-      why.textContent = 'Could not track the ball — try brighter light, tighter framing, or change method/Δt.';
+      why.textContent = 'Could not track the ball — expand ROI, brighten light, or adjust frames/Δt.';
       analyzeBtn.disabled = false; return;
     }
     why.textContent = 'Fitting short-arc trajectory…';
@@ -385,8 +488,8 @@ previewBtn.onclick = async () => {
   for(const c of lastCenters){
     const f = lastFrames[c.idx] || lastFrames[lastFrames.length-1];
     ctx.putImageData(f.img, 0, 0);
-    drawFrame([c.x, c.y]);
-    await new Promise(r => setTimeout(r, 50));
+    drawFrameRectAndDot(roiRect, [c.x, c.y]);
+    await new Promise(r => setTimeout(r, 30));
   }
 };
 
