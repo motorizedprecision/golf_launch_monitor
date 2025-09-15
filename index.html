@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Mac Safari Build</title>
+<title>MP Launch Monitor — Mac Safari (Homography Hotfix)</title>
 <style>
   :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
@@ -23,7 +23,7 @@
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Mac Safari</h1>
+<h1>Motorized Precision • Launch Monitor — Mac Safari (Homography Hotfix)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -59,7 +59,7 @@
 
 <video id="video" playsinline muted controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">Tap the 4 corners of your tray/paper on the canvas. Analyze steps frames (video player won’t “play” during analysis); the canvas/overlay and log show progress.</p>
+<p class="status">Tap the 4 corners of your tray/paper on the canvas. Analyze steps frames; the canvas/overlay and log show progress.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -211,20 +211,22 @@ function calibMeters() {
   return [0.2159, 0.2794];
 }
 function solveHomography(src4, dst4) {
+  // FIX: OpenCV.js returns a Mat; do not pass an output Mat as an argument.
   const src = cv.matFromArray(4,1,cv.CV_32FC2, src4.flat());
   const dst = cv.matFromArray(4,1,cv.CV_32FC2, dst4.flat());
-  const H = new cv.Mat();
-  cv.findHomography(src, dst, H);
+  const H = cv.findHomography(src, dst, cv.RANSAC, 5.0); // return Mat
   src.delete(); dst.delete();
+  if (!H || H.rows === 0 || H.cols === 0) throw new Error('Homography failed (empty).');
   return H;
 }
 function applyH(H, pt) {
   const [u,v]=pt; const h = H.data64F||H.data32F;
+  if (!h) throw new Error('Homography data missing.');
   const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8];
   return [a/c, b/c];
 }
 
-/* ---- Frame extraction (two methods) ---- */
+/* ---- Frame extraction ---- */
 async function extractFramesSeek(n=16, dt=1/240){
   const frames=[]; let t=video.currentTime;
   for(let i=0;i<n;i++){
@@ -238,7 +240,6 @@ async function extractFramesSeek(n=16, dt=1/240){
   }
   return frames;
 }
-
 async function extractFramesRVFC(n=16){
   const frames=[];
   let count=0;
@@ -264,9 +265,7 @@ async function extractFramesRVFC(n=16){
   let doneResolve, doneReject;
   const done = (err) => { err ? doneReject(err) : doneResolve(); };
   const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
-  // Ensure playing (required on Safari to get rVFC callbacks)
-  video.muted = true;
-  video.playbackRate = 0.1;
+  video.muted = true; video.playbackRate = 0.1;
   await video.play().catch(()=>{});
   handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
   await p;
@@ -368,7 +367,7 @@ analyzeBtn.onclick = async () => {
     out.speed.textContent   = `${kin.v0.toFixed(1)} m/s (${(kin.v0*2.237).toFixed(1)} mph)`;
     out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
     out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
-    out.carry.textContent   = `${kin.carry_m.toFixed(1)} m`;
+    out.carry.textContent   = `${(kin.carry_m.toFixed(1))} m`;
     out.nframes.textContent = `${(kin.n)}`;
     why.textContent = 'Done ✅';
   } catch (err) {
