@@ -5,60 +5,267 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>MP Launch Monitor</title>
 <style>
-  body { font-family: sans-serif; background: #111; color: #eee; margin: 0; padding: 1em; }
-  h1 { color: #ff725c; }
-  button,input,select { font-size: 16px; padding: 6px 10px; margin: 4px; }
-  video,canvas { width: 100%; max-width: 480px; background: #000; border: 1px solid #444; }
-  .stat { margin: 4px 0; }
+  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; }
+  body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
+  h1 { color: var(--brand); font-size: 20px; margin: 0 0 10px 0; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
+  button,input,select { font-size: 16px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background:#12141a; color:var(--ink); }
+  button.primary { background: linear-gradient(180deg,#ff725c,#e2443a); border:0; color:#fff; }
+  button[disabled]{ opacity:.5; }
+  video,canvas { width: 100%; max-width: 520px; background: #000; border: 1px solid var(--line); border-radius: 12px; }
+  .stat { background:#12141a; border:1px solid var(--line); border-radius:10px; padding:8px 12px; min-width:160px; }
+  .stats { display:flex; gap:8px; flex-wrap:wrap; margin-top: 10px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .status { color: var(--muted); font-size: 14px; }
 </style>
 </head>
 <body>
 <h1>Motorized Precision • Launch Monitor</h1>
-<input id="file" type="file" accept="video/*" />
-<button id="analyzeBtn" disabled>Analyze</button>
-<button id="clearBtn">Clear Points</button>
-<select id="markerSel">
-  <option value="tray">Ball Tray (34×25 cm)</option>
-  <option value="letter">Letter 8.5×11 in</option>
-  <option value="a4">A4 210×297 mm</option>
-</select>
+
+<div class="row">
+  <input id="file" type="file" accept="video/*" />
+  <select id="markerSel" title="Calibration object">
+    <option value="tray">Ball Tray (34×25 cm)</option>
+    <option value="letter">Letter 8.5×11 in</option>
+    <option value="a4">A4 210×297 mm</option>
+  </select>
+  <button id="clearBtn">Clear Points</button>
+  <button id="analyzeBtn" class="primary" disabled>Analyze</button>
+</div>
+
+<div class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • Points 0/4</div>
+
 <video id="video" playsinline controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p>Tap 4 corners of your calibration object (tray or paper) on the canvas before analyzing.</p>
-<div class="stat">Ball Speed: <span id="speed">–</span></div>
-<div class="stat">Launch: <span id="launch">–</span></div>
-<div class="stat">Azimuth: <span id="azimuth">–</span></div>
-<div class="stat">Carry (est.): <span id="carry">–</span></div>
-<script src="https://docs.opencv.org/4.x/opencv.js"></script>
-<script>
-let cvReady=false;
-window.Module={onRuntimeInitialized(){cvReady=true;maybeEnableAnalyze();}};
-const fileInput=document.getElementById('file');
-const video=document.getElementById('video');
-const canvas=document.getElementById('canvas');
-const ctx=canvas.getContext('2d');
-const analyzeBtn=document.getElementById('analyzeBtn');
-const clearBtn=document.getElementById('clearBtn');
-const markerSel=document.getElementById('markerSel');
-let clickedPts=[];
-const out={speed:document.getElementById('speed'),launch:document.getElementById('launch'),azimuth:document.getElementById('azimuth'),carry:document.getElementById('carry')};
+<p class="status">Tap the 4 corners of your calibration object (tray or paper) on the canvas before analyzing.</p>
 
-fileInput.onchange=async e=>{const f=e.target.files[0];if(!f)return;video.src=URL.createObjectURL(f);await video.play().catch(()=>{});video.pause();video.currentTime=0.05;await new Promise(r=>video.onseeked=r);drawFrame();clickedPts=[];maybeEnableAnalyze();};
-canvas.addEventListener('click',e=>{const r=canvas.getBoundingClientRect();const x=(e.clientX-r.left)*canvas.width/r.width;const y=(e.clientY-r.top)*canvas.height/r.height;if(clickedPts.length<4){clickedPts.push([x,y]);drawFrame();maybeEnableAnalyze();}});
-clearBtn.onclick=()=>{clickedPts=[];drawFrame();maybeEnableAnalyze();};
-function drawFrame(){const vw=video.videoWidth||1920,vh=video.videoHeight||1080;canvas.width=vw;canvas.height=vh;ctx.drawImage(video,0,0,vw,vh);ctx.fillStyle='#f33';clickedPts.forEach(([x,y])=>{ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();});}
-function maybeEnableAnalyze(){analyzeBtn.disabled=!(cvReady&&video.src&&clickedPts.length===4);}
-function paperMeters(){
-  if(markerSel.value==='tray') return [0.34,0.25]; // driving range ball tray (width x depth in meters)
-  if(markerSel.value==='letter') return [0.2159,0.2794];
-  if(markerSel.value==='a4')     return [0.2100,0.2970];
-}
-function solveHomography(src4,dst4){const src=cv.matFromArray(4,1,cv.CV_32FC2,src4.flat());const dst=cv.matFromArray(4,1,cv.CV_32FC2,dst4.flat());const H=new cv.Mat();cv.findHomography(src,dst,H);src.delete();dst.delete();return H;}
-function applyH(H,pt){const[u,v]=pt;const h=H.data64F||H.data32F;const a=h[0]*u+h[1]*v+h[2],b=h[3]*u+h[4]*v+h[5],c=h[6]*u+h[7]*v+h[8];return[a/c,b/c];}
-async function extractFrames(n=10){const frames=[];let t=video.currentTime,dt=1/240;for(let i=0;i<n;i++){video.currentTime=t;await new Promise(r=>video.onseeked=r);drawFrame();frames.push(ctx.getImageData(0,0,canvas.width,canvas.height));t+=dt;}return frames;}
-function detectCenters(frames){const centers=[];let prev=null;for(const img of frames){let src=cv.matFromImageData(img);let g=new cv.Mat();cv.cvtColor(src,g,cv.COLOR_RGBA2GRAY);let d=new cv.Mat();if(prev)cv.absdiff(g,prev,d);else d=g.clone();cv.GaussianBlur(d,d,new cv.Size(5,5),0);cv.threshold(d,d,30,255,cv.THRESH_BINARY);const cs=new cv.MatVector(),h=new cv.Mat();cv.findContours(d,cs,h,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);let best=null,bs=-1;for(let i=0;i<cs.size();i++){const c=cs.get(i);const area=cv.contourArea(c);if(area<10||area>2000){c.delete();continue;}const m=cv.moments(c);const cx=m.m10/(m.m00+1e-9),cy=m.m01/(m.m00+1e-9);if(area>bs){bs=area;best={x:cx,y:cy};}c.delete();}if(best)centers.push(best);src.delete();g.delete();d.delete();cs.delete();h.delete();prev=g;}return centers;}
-function estimateKinematics(centers,H){const pts=centers.map(c=>applyH(H,[c.x,c.y]));if(pts.length<2)return null;const dx=pts[1][0]-pts[0][0],dy=pts[1][1]-pts[0][1];const v=Math.hypot(dx,dy)/(1/240);const theta=Math.atan2(-dy,dx);const phi=Math.atan2(dy,dx);const g=9.8;const carry=(v*v/g)*Math.sin(2*theta)*0.75;return{v0:v,theta,phi,carry};}
-analyzeBtn.onclick=async()=>{const[W,H]=paperMeters();const dst=[[0,0],[0,H],[W,H],[W,0]];const Hm=solveHomography(clickedPts,dst);const frames=await extractFrames();const centers=detectCenters(frames);if(centers.length<2){alert('No ball tracked');return;}const kin=estimateKinematics(centers,Hm);if(!kin){alert('Fail');return;}out.speed.textContent=kin.v0.toFixed(1)+' m/s';out.launch.textContent=(kin.theta*180/Math.PI).toFixed(1)+'°';out.azimuth.textContent=(kin.phi*180/Math.PI).toFixed(1)+'°';out.carry.textContent=kin.carry.toFixed(1)+' m';Hm.delete();};
+<div class="stats">
+  <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
+  <div class="stat"><b>Launch</b><div id="launch" class="mono">–</div></div>
+  <div class="stat"><b>Azimuth</b><div id="azimuth" class="mono">–</div></div>
+  <div class="stat"><b>Carry (est.)</b><div id="carry" class="mono">–</div></div>
+  <div class="stat"><b>Frames</b><div id="nframes" class="mono">–</div></div>
+</div>
+
+<!-- Define Module BEFORE loading OpenCV.js -->
+<script>
+  window.cvReady = false;
+  window.Module = {
+    onRuntimeInitialized() {
+      window.cvReady = true;
+      maybeEnableAnalyze();
+    }
+  };
 </script>
+<script src="https://docs.opencv.org/4.x/opencv.js"></script>
+
+<script>
+const fileInput = document.getElementById('file');
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const clearBtn = document.getElementById('clearBtn');
+const markerSel = document.getElementById('markerSel');
+const why = document.getElementById('whyDisabled');
+
+const out = {
+  speed: document.getElementById('speed'),
+  launch: document.getElementById('launch'),
+  azimuth: document.getElementById('azimuth'),
+  carry: document.getElementById('carry'),
+  nframes: document.getElementById('nframes')
+};
+
+let clickedPts = []; // four [x,y] points
+
+fileInput.onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  video.src = URL.createObjectURL(file);
+  // Load first frame
+  await video.play().catch(()=>{});
+  video.pause();
+  video.currentTime = 0.03;
+  await new Promise(res => { video.onseeked = res; });
+  drawFrame(); clickedPts = [];
+  maybeEnableAnalyze();
+};
+
+video.addEventListener('timeupdate', () => { drawFrame(); });
+
+canvas.addEventListener('pointerdown', (e) => {
+  const r = canvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * canvas.width / r.width;
+  const y = (e.clientY - r.top) * canvas.height / r.height;
+  if (clickedPts.length < 4) {
+    clickedPts.push([x,y]);
+    drawFrame();
+    maybeEnableAnalyze();
+  }
+});
+
+clearBtn.onclick = () => { clickedPts = []; drawFrame(); maybeEnableAnalyze(); };
+
+function drawFrame() {
+  const vw = video.videoWidth || 1920, vh = video.videoHeight || 1080;
+  canvas.width = vw; canvas.height = vh;
+  ctx.drawImage(video, 0, 0, vw, vh);
+  // draw points
+  ctx.save();
+  ctx.fillStyle = '#ff725c'; ctx.strokeStyle = '#ff725c'; ctx.lineWidth = 3;
+  clickedPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
+  if (clickedPts.length === 4) {
+    ctx.beginPath();
+    ctx.moveTo(clickedPts[0][0], clickedPts[0][1]);
+    for (let i=1;i<4;i++) ctx.lineTo(clickedPts[i][0], clickedPts[i][1]);
+    ctx.closePath(); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function maybeEnableAnalyze() {
+  const okCV = window.cvReady && typeof cv !== 'undefined';
+  const okVid = !!video.src && (video.readyState >= 2);
+  const okPts = clickedPts.length === 4;
+  analyzeBtn.disabled = !(okCV && okVid && okPts);
+  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • Points ${clickedPts.length}/4`;
+}
+
+/* ---- Calibration geometry ---- */
+function calibMeters() {
+  if (markerSel.value === 'tray')   return [0.34, 0.25]; // width x depth in meters
+  if (markerSel.value === 'letter') return [0.2159, 0.2794];
+  if (markerSel.value === 'a4')     return [0.2100, 0.2970];
+  return [0.2159, 0.2794];
+}
+function solveHomography(src4, dst4) {
+  const src = cv.matFromArray(4,1,cv.CV_32FC2, src4.flat());
+  const dst = cv.matFromArray(4,1,cv.CV_32FC2, dst4.flat());
+  const H = new cv.Mat();
+  cv.findHomography(src, dst, H);
+  src.delete(); dst.delete();
+  return H;
+}
+function applyH(H, pt) {
+  const [u,v]=pt; const h = H.data64F||H.data32F;
+  const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8];
+  return [a/c, b/c];
+}
+
+/* ---- Frame extraction & detection ---- */
+async function extractFrames(n=14, step=1){
+  const frames=[]; let dt=1/240; let t=video.currentTime;
+  for(let i=0;i<n;i++){
+    video.currentTime = t;
+    await new Promise(res=>{ video.onseeked = res; });
+    drawFrame();
+    frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t});
+    t += dt*step;
+  }
+  return frames;
+}
+
+function detectCenters(frames){
+  const centers=[]; let prevGray=null;
+  for(const f of frames){
+    let src = cv.matFromImageData(f.img);
+    let gray = new cv.Mat(); cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+    let work = new cv.Mat();
+    if(prevGray){ cv.absdiff(gray,prevGray,work); } else { work = gray.clone(); }
+    cv.GaussianBlur(work,work,new cv.Size(3,3),0);
+    cv.threshold(work,work,28,255,cv.THRESH_BINARY);
+    const kernel = cv.Mat.ones(3,3,cv.CV_8U); cv.morphologyEx(work,work,cv.MORPH_OPEN,kernel);
+    const contours = new cv.MatVector(), hier = new cv.Mat();
+    cv.findContours(work,contours,hier,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+    let best=null, bestScore=-1;
+    for(let i=0;i<contours.size();i++){
+      const c = contours.get(i); const area = cv.contourArea(c);
+      if(area<12 || area>2500){ c.delete(); continue; }
+      const m = cv.moments(c,true);
+      let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
+      const r = cv.boundingRect(c);
+      const x0=Math.max(0,r.x-4), y0=Math.max(0,r.y-4);
+      const w=Math.min(gray.cols-x0,r.width+8), h=Math.min(gray.rows-y0,r.height+8);
+      if(w>3 && h>3){
+        const roi = gray.roi(new cv.Rect(x0,y0,w,h));
+        const m2 = cv.moments(roi,true);
+        cx = x0 + m2.m10/(m2.m00+1e-9);
+        cy = y0 + m2.m01/(m2.m00+1e-9);
+        roi.delete();
+      }
+      const rect = cv.boundingRect(c);
+      const circ = Math.min(rect.width,rect.height)/Math.max(rect.width,rect.height);
+      const score = circ + Math.min(1, area/250.0);
+      if(score>bestScore){ bestScore=score; best={x:cx,y:cy,t:f.t}; }
+      c.delete();
+    }
+    if(best) centers.push(best);
+    src.delete(); gray.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete();
+    prevGray && prevGray.delete();
+    prevGray = cv.matFromImageData(f.img); cv.cvtColor(prevGray,prevGray,cv.COLOR_RGBA2GRAY);
+  }
+  prevGray && prevGray.delete();
+  return centers;
+}
+
+/* ---- Kinematics ---- */
+function estimateCarry(v0, theta, drag=0.75){ const g=9.80665; return (v0*v0/g)*Math.sin(2*theta)*drag; }
+
+function fitKinematics(centers, H, scale=1.0){
+  // map first 3 points to ground plane
+  const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t]));
+  const i0=0, i2=Math.min(2, ground.length-1);
+  if (i2 <= i0) return null;
+  const dt = ground[i2][2] - ground[i0][2] || (1/240);
+  const vx = (ground[i2][0]-ground[i0][0]) / dt;
+  const vy = (ground[i2][1]-ground[i0][1]) / dt;
+  const vxy = Math.hypot(vx,vy);
+  // image-space vertical change heuristic for launch
+  const dy_img = centers[i2].y - centers[i0].y;
+  const theta = Math.atan2(-dy_img, vxy*40); // heuristic scale
+  const phi = Math.atan2(vy, vx);
+  const v0 = vxy / Math.cos(theta);
+  const carry_m = estimateCarry(v0, theta, 0.75);
+  return { v0, theta, phi, carry_m, n: centers.length };
+}
+
+/* ---- Analyze ---- */
+analyzeBtn.onclick = async () => {
+  analyzeBtn.disabled = true;
+  const [W,H] = calibMeters();
+  const dst = [[0,0],[0,H],[W,H],[W,0]];
+  const Hm = solveHomography(clickedPts, dst);
+
+  const frames = await extractFrames(14,1);
+  const centers = detectCenters(frames);
+  if (centers.length < 4) {
+    alert('Could not track the ball. Trim clip closer to impact, add light, or move phone closer.');
+    analyzeBtn.disabled = false; Hm.delete(); return;
+  }
+  const kin = fitKinematics(centers, Hm, 1.0);
+  if (!kin) { alert('Estimation failed.'); analyzeBtn.disabled=false; Hm.delete(); return; }
+
+  out.speed.textContent   = `${kin.v0.toFixed(1)} m/s (${(kin.v0*2.237).toFixed(1)} mph)`;
+  out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
+  out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
+  out.carry.textContent   = `${kin.carry_m.toFixed(1)} m`;
+  out.nframes.textContent = `${kin.n}`;
+
+  analyzeBtn.disabled = false;
+  Hm.delete();
+};
+
+/* Keep status fresh after visibility changes (iOS Safari quirk) */
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeEnableAnalyze(); });
+</script>
+
+<!-- Optional: simple service worker registration -->
+<script>
+if ('serviceWorker' in navigator) {
+  try { navigator.serviceWorker.register('./sw.js'); } catch(e){}
+}
+</script>
+
 </body>
 </html>
