@@ -3,24 +3,27 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor</title>
+<title>MP Launch Monitor (Tray Debug)</title>
 <style>
-  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; }
+  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --warn:#ffd666; --err:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
-  h1 { color: var(--brand); font-size: 20px; margin: 0 0 10px 0; }
+  h1 { color: var(--brand); font-size: 20px; margin: 0 0 12px 0; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
   button,input,select { font-size: 16px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background:#12141a; color:var(--ink); }
   button.primary { background: linear-gradient(180deg,#ff725c,#e2443a); border:0; color:#fff; }
   button[disabled]{ opacity:.5; }
-  video,canvas { width: 100%; max-width: 520px; background: #000; border: 1px solid var(--line); border-radius: 12px; }
+  #video, #canvas { width: 100%; max-width: 540px; background: #000; border: 1px solid var(--line); border-radius: 12px; display:block; }
+  #canvas { margin-top: 8px; }
   .stat { background:#12141a; border:1px solid var(--line); border-radius:10px; padding:8px 12px; min-width:160px; }
   .stats { display:flex; gap:8px; flex-wrap:wrap; margin-top: 10px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .status { color: var(--muted); font-size: 14px; }
+  #log { white-space: pre-wrap; font-size: 12px; color: #cbd5e1; background: #0b0d12; border:1px solid var(--line); border-radius:10px; padding:10px; max-width: 540px; }
+  label { display:flex; align-items:center; gap:8px; }
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor</h1>
+<h1>Motorized Precision • Launch Monitor (Tray Debug)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -28,8 +31,14 @@
     <option value="tray">Ball Tray (34×25 cm)</option>
     <option value="letter">Letter 8.5×11 in</option>
     <option value="a4">A4 210×297 mm</option>
+    <option value="custom">Custom…</option>
   </select>
+  <input id="customW" type="number" step="0.001" placeholder="W (m)" style="width:110px;display:none">
+  <input id="customH" type="number" step="0.001" placeholder="D (m)" style="width:110px;display:none">
+</div>
+<div class="row">
   <button id="clearBtn">Clear Points</button>
+  <label><input type="checkbox" id="debugOverlay" checked> Debug overlay</label>
   <button id="analyzeBtn" class="primary" disabled>Analyze</button>
 </div>
 
@@ -37,7 +46,7 @@
 
 <video id="video" playsinline controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">Tap the 4 corners of your calibration object (tray or paper) on the canvas before analyzing.</p>
+<p class="status">Tap the 4 corners of your calibration object (tray/paper) on the canvas below, then press Analyze. The canvas will show progress and the tracked ball path.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -47,12 +56,16 @@
   <div class="stat"><b>Frames</b><div id="nframes" class="mono">–</div></div>
 </div>
 
+<h3 style="margin:12px 0 6px 0">Log</h3>
+<div id="log" class="mono">—</div>
+
 <!-- Define Module BEFORE loading OpenCV.js -->
 <script>
   window.cvReady = false;
   window.Module = {
     onRuntimeInitialized() {
       window.cvReady = true;
+      log('OpenCV ready ✅');
       maybeEnableAnalyze();
     }
   };
@@ -67,7 +80,11 @@ const ctx = canvas.getContext('2d');
 const analyzeBtn = document.getElementById('analyzeBtn');
 const clearBtn = document.getElementById('clearBtn');
 const markerSel = document.getElementById('markerSel');
+const customW = document.getElementById('customW');
+const customH = document.getElementById('customH');
+const debugOverlay = document.getElementById('debugOverlay');
 const why = document.getElementById('whyDisabled');
+const logEl = document.getElementById('log');
 
 const out = {
   speed: document.getElementById('speed'),
@@ -79,9 +96,17 @@ const out = {
 
 let clickedPts = []; // four [x,y] points
 
+markerSel.onchange = () => {
+  const isCustom = markerSel.value === 'custom';
+  customW.style.display = isCustom ? '' : 'none';
+  customH.style.display = isCustom ? '' : 'none';
+  maybeEnableAnalyze();
+};
+
 fileInput.onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
+  log('Video selected: ' + (file.name || '(blob)'));
   video.src = URL.createObjectURL(file);
   // Load first frame
   await video.play().catch(()=>{});
@@ -101,13 +126,16 @@ canvas.addEventListener('pointerdown', (e) => {
   if (clickedPts.length < 4) {
     clickedPts.push([x,y]);
     drawFrame();
+    log(`Point ${clickedPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`);
     maybeEnableAnalyze();
   }
 });
 
-clearBtn.onclick = () => { clickedPts = []; drawFrame(); maybeEnableAnalyze(); };
+clearBtn.onclick = () => { clickedPts = []; drawFrame(); log('Cleared all points'); maybeEnableAnalyze(); };
 
-function drawFrame() {
+function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
+
+function drawFrame(overlayDot=null) {
   const vw = video.videoWidth || 1920, vh = video.videoHeight || 1080;
   canvas.width = vw; canvas.height = vh;
   ctx.drawImage(video, 0, 0, vw, vh);
@@ -120,6 +148,10 @@ function drawFrame() {
     ctx.moveTo(clickedPts[0][0], clickedPts[0][1]);
     for (let i=1;i<4;i++) ctx.lineTo(clickedPts[i][0], clickedPts[i][1]);
     ctx.closePath(); ctx.stroke();
+  }
+  if (debugOverlay.checked && overlayDot) {
+    ctx.fillStyle = '#4cd964';
+    ctx.beginPath(); ctx.arc(overlayDot[0], overlayDot[1], 8, 0, Math.PI*2); ctx.fill();
   }
   ctx.restore();
 }
@@ -137,6 +169,10 @@ function calibMeters() {
   if (markerSel.value === 'tray')   return [0.34, 0.25]; // width x depth in meters
   if (markerSel.value === 'letter') return [0.2159, 0.2794];
   if (markerSel.value === 'a4')     return [0.2100, 0.2970];
+  if (markerSel.value === 'custom') {
+    const w = parseFloat(customW.value||'0'); const h = parseFloat(customH.value||'0');
+    if (w>0 && h>0) return [w,h];
+  }
   return [0.2159, 0.2794];
 }
 function solveHomography(src4, dst4) {
@@ -153,14 +189,16 @@ function applyH(H, pt) {
   return [a/c, b/c];
 }
 
-/* ---- Frame extraction & detection ---- */
-async function extractFrames(n=14, step=1){
+/* ---- Frame extraction & detection with progress ---- */
+async function extractFrames(n=16, step=1){
   const frames=[]; let dt=1/240; let t=video.currentTime;
   for(let i=0;i<n;i++){
     video.currentTime = t;
     await new Promise(res=>{ video.onseeked = res; });
     drawFrame();
-    frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t});
+    frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i});
+    why.textContent = `Analyzing: sampling frames (${i+1}/${n})…`;
+    await new Promise(requestAnimationFrame);
     t += dt*step;
   }
   return frames;
@@ -184,36 +222,29 @@ function detectCenters(frames){
       if(area<12 || area>2500){ c.delete(); continue; }
       const m = cv.moments(c,true);
       let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
-      const r = cv.boundingRect(c);
-      const x0=Math.max(0,r.x-4), y0=Math.max(0,r.y-4);
-      const w=Math.min(gray.cols-x0,r.width+8), h=Math.min(gray.rows-y0,r.height+8);
-      if(w>3 && h>3){
-        const roi = gray.roi(new cv.Rect(x0,y0,w,h));
-        const m2 = cv.moments(roi,true);
-        cx = x0 + m2.m10/(m2.m00+1e-9);
-        cy = y0 + m2.m01/(m2.m00+1e-9);
-        roi.delete();
-      }
       const rect = cv.boundingRect(c);
       const circ = Math.min(rect.width,rect.height)/Math.max(rect.width,rect.height);
       const score = circ + Math.min(1, area/250.0);
-      if(score>bestScore){ bestScore=score; best={x:cx,y:cy,t:f.t}; }
+      if(score>bestScore){ bestScore=score; best={x:cx,y:cy,t:f.t, idx:f.idx}; }
       c.delete();
     }
-    if(best) centers.push(best);
+    if(best) {
+      centers.push(best);
+      if (debugOverlay.checked) { drawFrame([best.x, best.y]); }
+    }
     src.delete(); gray.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete();
-    prevGray && prevGray.delete();
+    if (prevGray) prevGray.delete();
     prevGray = cv.matFromImageData(f.img); cv.cvtColor(prevGray,prevGray,cv.COLOR_RGBA2GRAY);
+    why.textContent = `Analyzing: detecting ball (${f.idx+1}/${frames.length})…`;
   }
-  prevGray && prevGray.delete();
+  if (prevGray) prevGray.delete();
   return centers;
 }
 
 /* ---- Kinematics ---- */
 function estimateCarry(v0, theta, drag=0.75){ const g=9.80665; return (v0*v0/g)*Math.sin(2*theta)*drag; }
 
-function fitKinematics(centers, H, scale=1.0){
-  // map first 3 points to ground plane
+function fitKinematics(centers, H){
   const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t]));
   const i0=0, i2=Math.min(2, ground.length-1);
   if (i2 <= i0) return null;
@@ -221,7 +252,6 @@ function fitKinematics(centers, H, scale=1.0){
   const vx = (ground[i2][0]-ground[i0][0]) / dt;
   const vy = (ground[i2][1]-ground[i0][1]) / dt;
   const vxy = Math.hypot(vx,vy);
-  // image-space vertical change heuristic for launch
   const dy_img = centers[i2].y - centers[i0].y;
   const theta = Math.atan2(-dy_img, vxy*40); // heuristic scale
   const phi = Math.atan2(vy, vx);
@@ -232,40 +262,51 @@ function fitKinematics(centers, H, scale=1.0){
 
 /* ---- Analyze ---- */
 analyzeBtn.onclick = async () => {
-  analyzeBtn.disabled = true;
-  const [W,H] = calibMeters();
-  const dst = [[0,0],[0,H],[W,H],[W,0]];
-  const Hm = solveHomography(clickedPts, dst);
+  try {
+    analyzeBtn.disabled = true;
+    why.textContent = 'Analyzing: solving homography…';
+    const [W,H] = calibMeters();
+    const dst = [[0,0],[0,H],[W,H],[W,0]];
+    const Hm = solveHomography(clickedPts, dst);
+    log('Homography solved from 4 points → meters');
 
-  const frames = await extractFrames(14,1);
-  const centers = detectCenters(frames);
-  if (centers.length < 4) {
-    alert('Could not track the ball. Trim clip closer to impact, add light, or move phone closer.');
-    analyzeBtn.disabled = false; Hm.delete(); return;
+    const frames = await extractFrames(16,1);
+    log(`Extracted ${frames.length} frames`);
+
+    const centers = detectCenters(frames);
+    log(`Detections: ${centers.length} candidate ball positions`);
+
+    if (centers.length < 4) {
+      why.textContent = 'Could not track the ball — try brighter light, closer framing, or trim clip around impact.';
+      analyzeBtn.disabled = false; Hm.delete(); return;
+    }
+    why.textContent = 'Fitting short-arc trajectory…';
+    const kin = fitKinematics(centers, Hm);
+    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; Hm.delete(); return; }
+
+    out.speed.textContent   = `${kin.v0.toFixed(1)} m/s (${(kin.v0*2.237).toFixed(1)} mph)`;
+    out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
+    out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
+    out.carry.textContent   = `${kin.carry_m.toFixed(1)} m`;
+    out.nframes.textContent = `${kin.n}`;
+    why.textContent = 'Done ✅';
+
+    Hm.delete();
+  } catch (err) {
+    console.error(err);
+    log('Error: ' + (err && err.message ? err.message : String(err)));
+    why.textContent = 'Error during analysis.';
+  } finally {
+    analyzeBtn.disabled = false;
   }
-  const kin = fitKinematics(centers, Hm, 1.0);
-  if (!kin) { alert('Estimation failed.'); analyzeBtn.disabled=false; Hm.delete(); return; }
-
-  out.speed.textContent   = `${kin.v0.toFixed(1)} m/s (${(kin.v0*2.237).toFixed(1)} mph)`;
-  out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
-  out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
-  out.carry.textContent   = `${kin.carry_m.toFixed(1)} m`;
-  out.nframes.textContent = `${kin.n}`;
-
-  analyzeBtn.disabled = false;
-  Hm.delete();
 };
 
 /* Keep status fresh after visibility changes (iOS Safari quirk) */
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeEnableAnalyze(); });
-</script>
 
-<!-- Optional: simple service worker registration -->
-<script>
 if ('serviceWorker' in navigator) {
   try { navigator.serviceWorker.register('./sw.js'); } catch(e){}
 }
 </script>
-
 </body>
 </html>
