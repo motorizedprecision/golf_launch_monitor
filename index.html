@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Side-by-Side • Analyzed Playback • Ball Scale (v2)</title>
+<title>MP Launch Monitor — Side-by-Side • Color Assist • Reacquire (v3)</title>
 <style>
   :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
@@ -25,10 +25,11 @@
   .badge { border:1px solid var(--line); border-radius: 999px; padding: 4px 8px; font-size: 12px; color: var(--muted); }
   .drop { border:2px dashed #3a3f4a; border-radius:12px; padding:10px; color:#9aa4b2; }
   .drop.drag { border-color:#4cd964; color:#eaeef5; }
+  .seg { border:1px solid var(--line); border-radius:10px; padding:8px; }
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Side-by-Side + Analyzed Playback (v2)</h1>
+<h1>Motorized Precision • Launch Monitor — Side-by-Side + Color Assist + Reacquire (v3)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -38,42 +39,55 @@
   <button id="clearCacheBtn">Clear Cache</button>
 </div>
 
-<div class="row">
-  <label>Scale source
+<div class="row seg">
+  <label>Scale
     <select id="scaleMode">
       <option value="ball" selected>Golf ball (42.67 mm)</option>
-      <option value="tray">Tray/Paper (4‑point)</option>
       <option value="none">None (pixels only)</option>
     </select>
   </label>
-  <span id="scaleBadge" class="badge">Scale: Ball (click-drag across ball)</span>
-  <label><input type="checkbox" id="autoPlay" checked> Auto‑play after analyze</label>
-  <label><input type="checkbox" id="showDuringAnalysis"> Show progress overlay during analysis</label>
-</div>
-
-<div class="row" id="trayRow">
-  <button id="clearPtsBtn">Clear Tray Points</button>
-  <span class="status">Tap 4 corners of the tray/paper if tray mode is selected.</span>
-</div>
-
-<div class="row" id="ballRow">
+  <span id="scaleBadge" class="badge">Scale: Ball (drag diameter)</span>
   <button id="setBallScaleBtn">Set Ball Scale</button>
-  <span class="status">Click–drag a diameter across the ball to set scale.</span>
+  <span class="status">Click–drag across the ball to set scale.</span>
 </div>
 
-<div class="row">
+<div class="row seg">
   <button id="setRoiBtn">Set Ball ROI</button>
   <button id="clearRoiBtn">Clear ROI</button>
   <button id="setBallBtn">Set Ball Init</button>
   <button id="clearBallBtn">Clear Ball</button>
   <label>Template size <input id="tplSize" type="number" value="25" min="11" max="81" step="2" style="width:80px"></label>
-  <label>Search radius <input id="searchRad" type="number" value="90" min="20" max="240" style="width:90px"></label>
-  <label>Match thr <input id="matchThr" type="number" value="0.38" min="0.1" max="0.95" step="0.01" style="width:80px"></label>
-  <label>Gate (px) <input id="gatePx" type="number" value="60" min="10" max="240" style="width:80px"></label>
-  <label><input type="checkbox" id="tplAuto" checked> Auto‑update template</label>
+  <label>Search radius <input id="searchRad" type="number" value="140" min="20" max="300" style="width:90px"></label>
+  <label>Match thr <input id="matchThr" type="number" value="0.34" min="0.1" max="0.95" step="0.01" style="width:80px"></label>
+  <label>Gate (px) <input id="gatePx" type="number" value="90" min="10" max="300" style="width:80px"></label>
+  <label><input type="checkbox" id="tplAuto"> Auto‑update template (post‑impact)</label>
 </div>
 
-<div class="row">
+<div class="row seg">
+  <label><input type="checkbox" id="colorAssist" checked> Color Assist</label>
+  <label>Preset
+    <select id="colorPreset">
+      <option value="yellow" selected>Yellow range ball</option>
+      <option value="white">White ball</option>
+      <option value="custom">Custom HSV</option>
+    </select>
+  </label>
+  <label class="mono">Hlow <input id="hLow" type="number" value="18" min="0" max="179" style="width:70px"></label>
+  <label class="mono">Slow <input id="sLow" type="number" value="80" min="0" max="255" style="width:70px"></label>
+  <label class="mono">Vlow <input id="vLow" type="number" value="120" min="0" max="255" style="width:70px"></label>
+  <label class="mono">Hhigh <input id="hHigh" type="number" value="42" min="0" max="179" style="width:70px"></label>
+  <label class="mono">Shigh <input id="sHigh" type="number" value="255" min="0" max="255" style="width:70px"></label>
+  <label class="mono">Vhigh <input id="vHigh" type="number" value="255" min="0" max="255" style="width:70px"></label>
+</div>
+
+<div class="row seg">
+  <label>Impact guard (freeze frames) <input id="impactFreeze" type="number" value="8" min="0" max="60" style="width:80px"></label>
+  <label>Reacquire if lost <input id="reacquire" type="checkbox" checked></label>
+  <label>Reacquire radius <input id="reacqRad" type="number" value="220" min="50" max="600" style="width:90px"></label>
+  <label>Expected ball dia (px) <input id="expDia" type="number" value="22" min="8" max="80" style="width:90px"></label>
+</div>
+
+<div class="row seg">
   <label>Method
     <select id="method">
       <option value="seek" selected>Time‑step (30 fps)</option>
@@ -81,12 +95,10 @@
       <option value="auto">Auto</option>
     </select>
   </label>
-  <label>Frames <input id="numFrames" type="number" value="180" min="6" max="900" style="width:90px"></label>
+  <label>Frames <input id="numFrames" type="number" value="200" min="6" max="1200" style="width:90px"></label>
   <label>Δt (seek) <input id="deltaT" type="number" value="0.03333" step="0.0005" style="width:110px"><span class="status">≈1/30</span></label>
-  <button id="analyzeBtn" class="primary" disabled>Analyze</button>
-  <button id="playAnalyzedBtn" disabled>Play analyzed</button>
-  <button id="pauseBtn" disabled>Pause</button>
-  <button id="stopBtn" disabled>Stop</button>
+  <label><input type="checkbox" id="autoPlay" checked> Auto‑play after analyze</label>
+  <label><input type="checkbox" id="showDuringAnalysis" checked> Show progress overlay during analysis</label>
 </div>
 
 <div class="layout">
@@ -107,6 +119,13 @@
   </div>
 </div>
 
+<div class="row">
+  <button id="analyzeBtn" class="primary" disabled>Analyze</button>
+  <button id="playAnalyzedBtn" disabled>Play analyzed</button>
+  <button id="pauseBtn" disabled>Pause</button>
+  <button id="stopBtn" disabled>Stop</button>
+</div>
+
 <p class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • ROI: ❌ • BallInit: ❌ • Scale: Ball • rVFC: ?</p>
 
 <h3 style="margin:12px 0 6px 0">Log</h3>
@@ -125,33 +144,51 @@ const drop = document.getElementById('drop');
 const video = document.getElementById('video');
 const overlay = document.getElementById('overlay');
 const ctx = overlay.getContext('2d');
+
+const primeBtn = document.getElementById('primeBtn');
+const resetBtn = document.getElementById('resetBtn');
+const clearCacheBtn = document.getElementById('clearCacheBtn');
+
 const scaleModeSel = document.getElementById('scaleMode');
 const scaleBadge = document.getElementById('scaleBadge');
-const trayRow = document.getElementById('trayRow');
-const ballRow = document.getElementById('ballRow');
-const clearPtsBtn = document.getElementById('clearPtsBtn');
 const setBallScaleBtn = document.getElementById('setBallScaleBtn');
+
 const setRoiBtn = document.getElementById('setRoiBtn');
 const clearRoiBtn = document.getElementById('clearRoiBtn');
 const setBallBtn = document.getElementById('setBallBtn');
 const clearBallBtn = document.getElementById('clearBallBtn');
-const primeBtn = document.getElementById('primeBtn');
-const resetBtn = document.getElementById('resetBtn');
-const clearCacheBtn = document.getElementById('clearCacheBtn');
-const analyzeBtn = document.getElementById('analyzeBtn');
-const playAnalyzedBtn = document.getElementById('playAnalyzedBtn');
-const pauseBtn = document.getElementById('pauseBtn');
-const stopBtn = document.getElementById('stopBtn');
-const autoPlayEl = document.getElementById('autoPlay');
-const showDuringEl = document.getElementById('showDuringAnalysis');
+
 const tplSizeEl = document.getElementById('tplSize');
 const searchRadEl = document.getElementById('searchRad');
 const matchThrEl = document.getElementById('matchThr');
 const gatePxEl = document.getElementById('gatePx');
 const tplAutoEl = document.getElementById('tplAuto');
+
+const colorAssistEl = document.getElementById('colorAssist');
+const colorPresetSel = document.getElementById('colorPreset');
+const hLowEl = document.getElementById('hLow');
+const sLowEl = document.getElementById('sLow');
+const vLowEl = document.getElementById('vLow');
+const hHighEl = document.getElementById('hHigh');
+const sHighEl = document.getElementById('sHigh');
+const vHighEl = document.getElementById('vHigh');
+
+const impactFreezeEl = document.getElementById('impactFreeze');
+const reacquireEl = document.getElementById('reacquire');
+const reacqRadEl = document.getElementById('reacqRad');
+const expDiaEl = document.getElementById('expDia');
+
 const methodSel = document.getElementById('method');
 const numFramesEl = document.getElementById('numFrames');
 const deltaTEl = document.getElementById('deltaT');
+const autoPlayEl = document.getElementById('autoPlay');
+const showDuringEl = document.getElementById('showDuringAnalysis');
+
+const analyzeBtn = document.getElementById('analyzeBtn');
+const playAnalyzedBtn = document.getElementById('playAnalyzedBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const stopBtn = document.getElementById('stopBtn');
+
 const why = document.getElementById('whyDisabled');
 const logEl = document.getElementById('log');
 
@@ -164,23 +201,22 @@ const out = {
 };
 
 /* ---------- State ---------- */
-let calibPts = []; // for tray mode (4 pts)
-let roiRect = null;
-let roiMode = false, roiStart = null;
-let ballScaleMode = false, ballScaleStart = null, ballScalePx = null; // pixel diameter
-let ballInit = null; // {x,y, tpl, w,h}
-let setBallMode = false;
-let lastCenters = [];
-let lastFrames = [];
-let analysisStartMediaTime = 0;
-let objectURL = null;
-let m_per_px = null; // when using ball or none
-let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 1080x1920
-let playingAnalyzed = false;
-let rAFHandle = 0;
-let hasRVFC = false;
+let roiRect = null; let roiMode=false; let roiStart=null;
+let ballScaleMode=false; let ballScaleStart=null; let ballScalePx=null; let m_per_px=null;
+let ballInit=null; let setBallMode=false;
+let lastCenters=[]; let lastFrames=[]; let analysisStartMediaTime=0;
+let objectURL=null; let hasRVFC=false;
+let minAreaFrac=0.00001, maxAreaFrac=0.0025;
+let playingAnalyzed=false; let rAFHandle=0;
 
 function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
+
+/* ---------- Presets ---------- */
+colorPresetSel.onchange = ()=>{
+  const p = colorPresetSel.value;
+  if (p==='yellow'){ hLowEl.value=18; sLowEl.value=80; vLowEl.value=120; hHighEl.value=42; sHighEl.value=255; vHighEl.value=255; }
+  else if (p==='white'){ hLowEl.value=0; sLowEl.value=0; vLowEl.value=180; hHighEl.value=179; sHighEl.value=60; vHighEl.value=255; }
+};
 
 /* ---------- Helpers ---------- */
 function waitForEvent(el, type, timeout=12000){
@@ -191,281 +227,201 @@ function waitForEvent(el, type, timeout=12000){
     el.addEventListener(type, on, { once:true });
   });
 }
-function cleanupObjectURL(){ if (objectURL) { URL.revokeObjectURL(objectURL); objectURL = null; } }
+function cleanupObjectURL(){ if (objectURL) { URL.revokeObjectURL(objectURL); objectURL=null; } }
 function resetApp(){
-  try {
-    cleanupObjectURL();
-    video.pause(); video.removeAttribute('src'); video.load();
-    fileInput.value = '';
-    calibPts = []; roiRect = null; roiMode = false; roiStart = null;
+  try { cleanupObjectURL(); video.pause(); video.removeAttribute('src'); video.load(); fileInput.value='';
+    roiRect=null; roiMode=false; roiStart=null;
     ballScaleMode=false; ballScaleStart=null; ballScalePx=null; m_per_px=null;
-    if (ballInit && ballInit.tpl) ballInit.tpl.delete(); ballInit=null; setBallMode=false;
+    if (ballInit && ballInit.tpl){ ballInit.tpl.delete(); } ballInit=null; setBallMode=false;
     lastCenters=[]; lastFrames=[];
     ctx.clearRect(0,0,overlay.width,overlay.height);
     log('App reset');
   } catch(e){ log('Reset error: '+e.message); }
   maybeEnable();
 }
-resetBtn.onclick = resetApp;
-clearCacheBtn.onclick = async ()=>{
-  if (!('caches' in window)) { log('Cache API not available'); return; }
-  const keys = await caches.keys();
-  await Promise.all(keys.map(k=>caches.delete(k)));
-  log('Cleared service worker caches. Hard reload to ensure fresh code.');
-};
+resetBtn.onclick=resetApp;
+clearCacheBtn.onclick=async()=>{ if(!('caches' in window)){ log('Cache API not available'); return; } const keys=await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k))); log('Cleared service worker caches. Hard reload to ensure fresh code.'); };
 
-video.addEventListener('error', () => {
-  const e = video.error; const map = { 1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED' };
-  log(`Video error: ${e? (map[e.code]||e.code) : 'unknown'}`);
-});
-['loadstart','loadedmetadata','loadeddata','canplay','canplaythrough','stalled','suspend','emptied','waiting'].forEach(ev=>{
-  video.addEventListener(ev, ()=> log(`video event: ${ev}, readyState=${video.readyState}`));
-});
+video.addEventListener('error', ()=>{ const e=video.error; const map={1:'ABORTED',2:'NETWORK',3:'DECODE',4:'SRC_NOT_SUPPORTED'}; log(`Video error: ${e?(map[e.code]||e.code):'unknown'}`); });
+['loadstart','loadedmetadata','loadeddata','canplay','canplaythrough','stalled','suspend','emptied','waiting'].forEach(ev=> video.addEventListener(ev, ()=> log(`video event: ${ev}, readyState=${video.readyState}`)) );
 
-/* ---------- Scaling mode ---------- */
-scaleModeSel.onchange = () => {
-  const mode = scaleModeSel.value;
-  trayRow.style.display = (mode==='tray') ? '' : 'none';
-  ballRow.style.display = (mode==='ball') ? '' : 'none';
-  scaleBadge.textContent = (mode==='tray') ? 'Scale: Tray/Paper (4‑point)' : (mode==='ball' ? 'Scale: Ball (drag diameter)' : 'Scale: None (pixels)');
-  maybeEnable();
-};
-/* default visibility */
-trayRow.style.display = 'none';
-ballRow.style.display = '';
-
-/* ---------- File & Drop ---------- */
-fileInput.onchange = async (e) => {
-  try {
-    const f = e.target.files && e.target.files[0];
-    if (!f) return;
-    if (!f.type || !f.type.startsWith('video/')) { log('Not a video file'); return; }
+/* ---------- File ---------- */
+fileInput.onchange = async (e)=>{
+  try{
+    const f=e.target.files && e.target.files[0]; if(!f) return;
+    if(!f.type || !f.type.startsWith('video/')){ log('Not a video file'); return; }
     fileInput.blur(); setTimeout(()=>{ fileInput.value=''; }, 0);
     await loadVideoFile(f);
   } catch(err){ log('Load error: '+err.message); }
 };
-['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add('drag'); }));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove('drag'); }));
-drop.addEventListener('drop', async (e)=>{
-  const f = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (f) await loadVideoFile(f);
-});
+['dragenter','dragover'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev=> drop.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', async (e)=>{ const f=e.dataTransfer.files && e.dataTransfer.files[0]; if(f) await loadVideoFile(f); });
 
 async function loadVideoFile(file){
-  try {
+  try{
     log(`Loading: ${file.name} (${Math.round(file.size/1024)} kB)`);
     cleanupObjectURL();
     objectURL = URL.createObjectURL(file);
-    video.muted = true; video.playsInline = true;
-    video.src = objectURL;
+    video.muted = true; video.playsInline = true; video.src = objectURL;
     await waitForEvent(video,'loadedmetadata',15000);
     log(`loadedmetadata: ${video.videoWidth}×${video.videoHeight}, duration≈${(video.duration||0).toFixed(2)}s`);
     overlay.width = video.videoWidth || 1080; overlay.height = video.videoHeight || 1920;
-    drawOverlayFrame(); // initial
-    try { await video.play(); } catch(_){}
+    drawOverlayFrame();
+    try{ await video.play(); }catch(_){}
     await waitForEvent(video,'canplay',15000).catch(()=>{});
     video.pause();
-    video.currentTime = Math.min(0.03, Math.max(0, (video.duration||0) * 0.01));
+    video.currentTime = Math.min(0.03, Math.max(0, (video.duration||0)*0.01));
     await waitForEvent(video,'seeked',15000);
     drawOverlayFrame();
-    const area = Math.max(1, (video.videoWidth||1920) * (video.videoHeight||1080));
-    const minA = Math.max(6, Math.floor(area * minAreaFrac));
-    const maxA = Math.max(minA+1, Math.floor(area * maxAreaFrac));
-    log(`Detection area bounds: min≈${minA}, max≈${maxA}`);
+    const area = Math.max(1, (video.videoWidth||1920)*(video.videoHeight||1080));
+    const minA = Math.max(6, Math.floor(area*minAreaFrac));
+    const maxA = Math.max(minA+1, Math.floor(area*maxAreaFrac));
     window.MP_DET = {minA, maxA};
     hasRVFC = !!video.requestVideoFrameCallback;
-    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[];
+    lastCenters=[]; lastFrames=[];
   } finally { maybeEnable(); }
 }
+primeBtn.onclick = async ()=>{ try{ video.muted=true; await video.play(); await new Promise(r=>setTimeout(r,150)); video.pause(); log('Autoplay primed (play→pause)'); maybeEnable(); }catch(e){ log('Autoplay prime failed: '+e.message); } };
 
-primeBtn.onclick = async () => {
-  try { video.muted = true; await video.play(); await new Promise(r => setTimeout(r, 150)); video.pause(); log('Autoplay primed (play→pause)'); maybeEnable(); }
-  catch(e) { log('Autoplay prime failed: ' + e.message); }
-};
-
-/* ---------- Canvas interactions ---------- */
-overlay.addEventListener('pointerdown', (e) => {
+/* ---------- Interactions ---------- */
+overlay.addEventListener('pointerdown', (e)=>{
   const {x,y} = canvasXY(e);
-  if (ballScaleMode) {
-    ballScaleStart = {x,y};
-    return;
-  }
-  if (setBallMode) {
-    setBallMode = false;
-    const size = Math.max(11, Math.min(81, (parseInt(tplSizeEl.value||'25',10)|1)));
-    const half = (size-1)/2;
-    const cx = Math.max(half, Math.min(overlay.width-half-1, x|0));
-    const cy = Math.max(half, Math.min(overlay.height-half-1, y|0));
-    const roi = new cv.Rect(cx-half, cy-half, size, size);
+  if (ballScaleMode){ ballScaleStart={x,y}; return; }
+  if (setBallMode){
+    setBallMode=false;
+    const size=Math.max(11, Math.min(81, (parseInt(tplSizeEl.value||'25',10)|1)));
+    const half=(size-1)/2;
+    const cx=Math.max(half, Math.min(overlay.width-half-1, x|0));
+    const cy=Math.max(half, Math.min(overlay.height-half-1, y|0));
+    const roi=new cv.Rect(cx-half, cy-half, size, size);
     drawOverlayFrame();
-    const frame = ctx.getImageData(0,0,overlay.width,overlay.height);
-    let src = cv.matFromImageData(frame);
-    let gray = new cv.Mat(); cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
-    let tpl = gray.roi(roi).clone();
-    src.delete(); gray.delete();
-    if (ballInit && ballInit.tpl) { ballInit.tpl.delete(); }
-    ballInit = {x: cx, y: cy, tpl, w: size, h: size};
+    const frame=ctx.getImageData(0,0,overlay.width,overlay.height);
+    let src=cv.matFromImageData(frame), gray=new cv.Mat(); cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+    let tpl=gray.roi(roi).clone(); src.delete(); gray.delete();
+    if(ballInit && ballInit.tpl) ballInit.tpl.delete();
+    ballInit={x:cx,y:cy,tpl,w:size,h:size};
     log(`Ball template set @ (${cx}, ${cy}) size ${size}×${size}`);
-    drawOverlayFrame();
-    ctx.save(); ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(cx-half, cy-half, size, size); ctx.restore();
-    maybeEnable();
-    return;
+    drawOverlayFrame(); ctx.save(); ctx.strokeStyle='#ffd166'; ctx.lineWidth=2; ctx.strokeRect(cx-half, cy-half, size, size); ctx.restore();
+    maybeEnable(); return;
   }
-  if (roiMode) { roiStart = {x,y}; return; }
-  if (scaleModeSel.value === 'tray' && calibPts.length < 4) {
-    calibPts.push([x,y]); drawOverlayFrame();
-    log(`Tray point ${calibPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`);
-    maybeEnable();
+  if (roiMode){ roiStart={x,y}; return; }
+});
+overlay.addEventListener('pointermove', (e)=>{
+  const {x,y} = canvasXY(e);
+  if (ballScaleMode && ballScaleStart){
+    drawOverlayFrame(); ctx.save(); ctx.strokeStyle='#ffd166'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(ballScaleStart.x, ballScaleStart.y); ctx.lineTo(x,y); ctx.stroke();
+    const d=Math.hypot(x-ballScaleStart.x, y-ballScaleStart.y); ctx.fillStyle='#ffd166'; ctx.fillText(`${d.toFixed(1)} px`, x+8, y+8); ctx.restore();
+  } else if (roiMode && roiStart){
+    drawOverlayFrame(normRect(roiStart,{x,y}));
   }
 });
-overlay.addEventListener('pointermove', (e) => {
+overlay.addEventListener('pointerup', (e)=>{
   const {x,y} = canvasXY(e);
-  if (ballScaleMode && ballScaleStart) {
-    drawOverlayFrame();
-    ctx.save();
-    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(ballScaleStart.x, ballScaleStart.y); ctx.lineTo(x,y); ctx.stroke();
-    const d = Math.hypot(x - ballScaleStart.x, y - ballScaleStart.y);
-    ctx.fillStyle = '#ffd166'; ctx.fillText(`${d.toFixed(1)} px`, x+8, y+8);
-    ctx.restore();
-  } else if (roiMode && roiStart) {
-    drawOverlayFrame(normRect(roiStart, {x,y}));
+  if (ballScaleMode && ballScaleStart){
+    const d=Math.hypot(x-ballScaleStart.x, y-ballScaleStart.y);
+    ballScalePx=Math.max(5,d); m_per_px=0.04267/ballScalePx;
+    ballScaleMode=false; ballScaleStart=null; log(`Ball scale set: ${ballScalePx.toFixed(2)} px → ${(m_per_px).toExponential(3)} m/px`);
+    drawOverlayFrame(); maybeEnable(); return;
   }
-});
-overlay.addEventListener('pointerup', (e) => {
-  const {x,y} = canvasXY(e);
-  if (ballScaleMode && ballScaleStart) {
-    const d = Math.hypot(x - ballScaleStart.x, y - ballScaleStart.y);
-    ballScalePx = Math.max(5, d);
-    m_per_px = 0.04267 / ballScalePx; // 42.67 mm
-    ballScaleMode = false; ballScaleStart = null;
-    log(`Ball scale set: ${ballScalePx.toFixed(2)} px → ${(m_per_px).toExponential(3)} m/px`);
-    drawOverlayFrame();
-    maybeEnable();
-    return;
-  }
-  if (roiMode && roiStart) {
-    roiRect = normRect(roiStart, {x,y}); roiStart = null; roiMode = false;
-    drawOverlayFrame();
-    log(`ROI set: x=${roiRect.x|0}, y=${roiRect.y|0}, w=${roiRect.w|0}, h=${roiRect.h|0}`);
-    maybeEnable();
+  if (roiMode && roiStart){
+    roiRect=normRect(roiStart,{x,y}); roiStart=null; roiMode=false; drawOverlayFrame(); log(`ROI set: x=${roiRect.x|0}, y=${roiRect.y|0}, w=${roiRect.w|0}, h=${roiRect.h|0}`); maybeEnable();
   }
 });
 
-setRoiBtn.onclick = () => { roiMode = true; log('Draw ROI on overlay (drag)...'); };
-clearRoiBtn.onclick = () => { roiRect = null; drawOverlayFrame(); log('Cleared ROI'); maybeEnable(); };
-clearPtsBtn.onclick = () => { calibPts = []; drawOverlayFrame(); log('Cleared tray points'); maybeEnable(); };
-setBallBtn.onclick = () => { setBallMode = true; log('Click the ball on the overlay to capture a template'); };
-clearBallBtn.onclick = () => { if (ballInit && ballInit.tpl) ballInit.tpl.delete(); ballInit = null; drawOverlayFrame(); log('Cleared ball template'); maybeEnable(); };
-setBallScaleBtn.onclick = () => { ballScaleMode = true; log('Click–drag a diameter across the ball'); };
+setRoiBtn.onclick=()=>{ roiMode=true; log('Draw ROI on overlay (drag)...'); };
+clearRoiBtn.onclick=()=>{ roiRect=null; drawOverlayFrame(); log('Cleared ROI'); maybeEnable(); };
+setBallBtn.onclick=()=>{ setBallMode=true; log('Click the ball to capture a template'); };
+clearBallBtn.onclick=()=>{ if(ballInit && ballInit.tpl) ballInit.tpl.delete(); ballInit=null; drawOverlayFrame(); log('Cleared ball template'); maybeEnable(); };
+setBallScaleBtn.onclick=()=>{ ballScaleMode=true; log('Click–drag a diameter across the ball'); };
 
 /* ---------- Drawing ---------- */
 function drawOverlayFrame(tempRect){
   const vw = video.videoWidth || 1080, vh = video.videoHeight || 1920;
-  overlay.width = vw; overlay.height = vh;
-  try { ctx.drawImage(video, 0, 0, vw, vh); } catch(_){ /* might not be ready */ }
+  overlay.width=vw; overlay.height=vh;
+  try{ ctx.drawImage(video,0,0,vw,vh); }catch(_){}
   ctx.save();
-  // tray hull
-  if (scaleModeSel.value === 'tray') {
-    ctx.fillStyle = '#ff725c'; ctx.strokeStyle = '#ff725c'; ctx.lineWidth = 3;
-    calibPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
-    if (calibPts.length === 4) { ctx.beginPath(); ctx.moveTo(calibPts[0][0], calibPts[0][1]); for (let i=1;i<4;i++) ctx.lineTo(calibPts[i][0], calibPts[i][1]); ctx.closePath(); ctx.stroke(); }
-  }
-  // ROI
-  if (roiRect) { ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h); }
-  if (tempRect) { ctx.setLineDash([6,6]); ctx.strokeStyle = '#4cd964aa'; ctx.lineWidth = 2; ctx.strokeRect(tempRect.x, tempRect.y, tempRect.w, tempRect.h); ctx.setLineDash([]); }
-  // Ball template box
-  if (ballInit && ballInit.tpl) {
-    const half = (ballInit.w-1)/2;
-    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(ballInit.x-half, ballInit.y-half, ballInit.w, ballInit.h);
-  }
+  if (roiRect){ ctx.strokeStyle='#4cd964'; ctx.lineWidth=3; ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h); }
+  if (tempRect){ ctx.setLineDash([6,6]); ctx.strokeStyle='#4cd964aa'; ctx.lineWidth=2; ctx.strokeRect(tempRect.x,tempRect.y,tempRect.w,tempRect.h); ctx.setLineDash([]); }
+  if (ballInit && ballInit.tpl){ const half=(ballInit.w-1)/2; ctx.strokeStyle='#ffd166'; ctx.lineWidth=2; ctx.strokeRect(ballInit.x-half, ballInit.y-half, ballInit.w, ballInit.h); }
   ctx.restore();
 }
-
 function drawTrail(pts, thick){
-  const n = Math.min(pts.length, 240);
-  const start = pts.length - n;
-  for(let i=start+1;i<pts.length;i++){
-    const p0 = pts[i-1], p1 = pts[i];
-    const a = (i-start)/n;
-    ctx.strokeStyle = `rgba(76, 217, 100, ${Math.max(0.12, Math.min(0.85, a))})`;
-    ctx.lineWidth = Math.max(1, thick * (0.6 + 0.4*a));
-    ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
-  }
-  const tip = pts[pts.length-1];
-  ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(tip.x, tip.y, Math.max(6, thick+2), 0, Math.PI*2); ctx.fill();
+  const n=Math.min(pts.length, 280); const start=pts.length-n;
+  for(let i=start+1;i<pts.length;i++){ const p0=pts[i-1], p1=pts[i]; const a=(i-start)/n; ctx.strokeStyle=`rgba(76,217,100,${Math.max(0.12,Math.min(0.85,a))})`; ctx.lineWidth=Math.max(1, thick*(0.6+0.4*a)); ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y); ctx.stroke(); }
+  const tip=pts[pts.length-1]; ctx.fillStyle='#4cd964'; ctx.beginPath(); ctx.arc(tip.x,tip.y,6,0,Math.PI*2); ctx.fill();
 }
-
-function canvasXY(e){ const r = overlay.getBoundingClientRect(); const x = (e.clientX - r.left) * overlay.width / r.width; const y = (e.clientY - r.top) * overlay.height / r.height; return {x,y}; }
-function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
+function canvasXY(e){ const r=overlay.getBoundingClientRect(); const x=(e.clientX-r.left)*overlay.width/r.width; const y=(e.clientY-r.top)*overlay.height/r.height; return {x,y}; }
+function normRect(a,b){ const x=Math.min(a.x,b.x), y=Math.min(a.y,b.y); const w=Math.abs(a.x-b.x), h=Math.abs(a.y-b.y); return {x,y,w,h}; }
 
 /* ---------- Extraction ---------- */
-async function extractFramesSeek(n=180, dt=0.03333, showProgress=false){
-  const frames=[]; let t=video.currentTime; const dur = video.duration || 1e9;
-  analysisStartMediaTime = t;
-  for(let i=0;i<n;i++){
-    if (t > dur) break;
-    video.currentTime = t;
-    await new Promise(res=>{ video.onseeked = res; });
-    drawOverlayFrame();
-    const img = ctx.getImageData(0,0,overlay.width,overlay.height);
-    frames.push({img, t, idx:i});
-    if (showProgress) { ctx.save(); ctx.fillStyle='#ffffff'; ctx.fillText(`Sampling ${i+1}/${n}`, 12, 22); ctx.restore(); }
-    why.textContent = `Sampling (seek): ${i+1}/${n}`;
-    await new Promise(requestAnimationFrame);
-    t += dt;
-  }
+async function extractFramesSeek(n=200, dt=0.03333, showProgress=false){
+  const frames=[]; let t=video.currentTime; const dur=video.duration||1e9; analysisStartMediaTime=t;
+  for(let i=0;i<n;i++){ if(t>dur) break; video.currentTime=t; await new Promise(res=>{ video.onseeked=res; }); drawOverlayFrame(); const img=ctx.getImageData(0,0,overlay.width,overlay.height); frames.push({img,t,idx:i}); if(showProgress){ overlayProgress(`Sampling ${i+1}/${n}`);} await new Promise(requestAnimationFrame); t+=dt; }
   return frames;
 }
-async function extractFramesRVFC(n=180, showProgress=false){
-  const frames=[]; let count=0; let handle=0;
-  analysisStartMediaTime = video.currentTime;
-  const onframe = (now, meta) => {
-    try{
-      drawOverlayFrame();
-      const img = ctx.getImageData(0,0,overlay.width,overlay.height);
-      frames.push({img, t: meta.mediaTime, idx: count});
-      if (showProgress) { ctx.save(); ctx.fillStyle='#ffffff'; ctx.fillText(`Sampling ${count+1}/${n}`, 12, 22); ctx.restore(); }
-      why.textContent = `Sampling (rVFC): ${count+1}/${n}`;
-      count++;
-      if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; }
-      handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
-    }catch(e){ console.error(e); done(e); }
-  };
-  let doneResolve, doneReject; const done = (err) => { err ? doneReject(err) : doneResolve(); }; const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
-  video.muted = true; video.playbackRate = 0.1; try { await video.play(); } catch(_){}
-  handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
+async function extractFramesRVFC(n=200, showProgress=false){
+  const frames=[]; let count=0; let handle=0; analysisStartMediaTime=video.currentTime;
+  const onframe=(now, meta)=>{ try{ drawOverlayFrame(); const img=ctx.getImageData(0,0,overlay.width,overlay.height); frames.push({img,t:meta.mediaTime,idx:count}); if(showProgress){ overlayProgress(`Sampling ${count+1}/${n}`);} count++; if(count>=n){ video.pause(); cancelAnimationFrame(handle); done(); return;} handle=requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe)); }catch(e){ console.error(e); done(e);} };
+  let doneResolve, doneReject; const done=(err)=>{ err?doneReject(err):doneResolve(); }; const p=new Promise((res,rej)=>{ doneResolve=res; doneReject=rej; });
+  video.muted=true; video.playbackRate=0.1; try{ await video.play(); }catch(_){}
+  handle=requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
   await p; return frames;
 }
+function overlayProgress(text){ ctx.save(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(10,10,180,26); ctx.fillStyle='#ffffff'; ctx.font='14px system-ui, sans-serif'; ctx.fillText(text, 18, 28); ctx.restore(); }
 
-/* ---------- α‑β filter for prediction ---------- */
-class GHFilter {
-  constructor(alpha=0.65, beta=0.85){ this.alpha=alpha; this.beta=beta; this.x=null; this.y=null; this.vx=0; this.vy=0; }
-  predict(dt){ if (this.x===null) return [null,null]; return [this.x + this.vx*dt, this.y + this.vy*dt]; }
-  correct(mx,my,dt){ if (this.x===null){ this.x=mx; this.y=my; this.vx=0; this.vy=0; return [this.x,this.y]; } const px=this.x+this.vx*dt, py=this.y+this.vy*dt; const rx=mx-px, ry=my-py; this.x = px + this.alpha*rx; this.y = py + this.alpha*ry; this.vx = this.vx + (this.beta/dt)*rx; this.vy = this.vy + (this.beta/dt)*ry; return [this.x,this.y]; }
+/* ---------- Predictor ---------- */
+class GHFilter { constructor(alpha=0.65,beta=0.85){ this.alpha=alpha; this.beta=beta; this.x=null; this.y=null; this.vx=0; this.vy=0; } predict(dt){ if(this.x===null) return [null,null]; return [this.x+this.vx*dt, this.y+this.vy*dt]; } correct(mx,my,dt){ if(this.x===null){ this.x=mx; this.y=my; this.vx=0; this.vy=0; return [this.x,this.y]; } const px=this.x+this.vx*dt, py=this.y+this.vy*dt; const rx=mx-px, ry=my-py; this.x=px+this.alpha*rx; this.y=py+this.alpha*ry; this.vx=this.vx+(this.beta/dt)*rx; this.vy=this.vy+(this.beta/dt)*ry; return [this.x,this.y]; }}
+
+/* ---------- Color mask ---------- */
+function colorMask(grayFull, hsvFull){
+  const use=colorAssistEl.checked;
+  if(!use) return null;
+  const hL=+hLowEl.value|0, sL=+sLowEl.value|0, vL=+vLowEl.value|0;
+  const hH=+hHighEl.value|0, sH=+sHighEl.value|0, vH=+vHighEl.value|0;
+  const low = new cv.Mat(hsvFull.rows, hsvFull.cols, hsvFull.type(), [hL,sL,vL,0]);
+  const high= new cv.Mat(hsvFull.rows, hsvFull.cols, hsvFull.type(), [hH,sH,vH,255]);
+  let mask = new cv.Mat();
+  cv.inRange(hsvFull, low, high, mask);
+  // Clean up small speckles
+  const kernel = cv.Mat.ones(3,3,cv.CV_8U);
+  cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
+  low.delete(); high.delete(); kernel.delete();
+  return mask;
 }
 
-/* ---------- Detection ---------- */
+/* ---------- Detection with Color Assist + Reacquire ---------- */
 function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
   const minA = (window.MP_DET && window.MP_DET.minA) || 8;
   const maxA = (window.MP_DET && window.MP_DET.maxA) || 600;
   const useTpl = !!(ballInit && ballInit.tpl);
-  const gatePx = Math.max(10, parseInt(gatePxEl.value||'60',10));
-  const tplAuto = tplAutoEl.checked;
-  const r = Math.max(20, parseInt(searchRadEl.value||'90',10));
-  const mthr = parseFloat(matchThrEl.value||'0.38');
+  const gatePx = Math.max(10, parseInt(gatePxEl.value||'90',10));
+  const r = Math.max(20, parseInt(searchRadEl.value||'140',10));
+  const mthr = parseFloat(matchThrEl.value||'0.34');
   const gh = new GHFilter(0.65, 0.85);
-  let lastPos = ballInit ? [ballInit.x, ballInit.y] : [roi.x+roi.w/2, roi.y+roi.h/2];
+  const freezeN = Math.max(0, parseInt(impactFreezeEl.value||'8',10));
+  const doReacq = document.getElementById('reacquire').checked;
+  const reacqR = Math.max(50, parseInt(reacqRadEl.value||'220',10));
+  const expDia = Math.max(8, parseInt(expDiaEl.value||'22',10));
+  const expArea = Math.PI*(expDia/2)*(expDia/2);
+  const areaMin = Math.max(6, Math.floor(expArea*0.35));
+  const areaMax = Math.max(areaMin+1, Math.floor(expArea*2.5));
+
+  let lastPos = useTpl ? [ballInit.x, ballInit.y] : [roi.x+roi.w/2, roi.y+roi.h/2];
+  let lostCount = 0;
+  let freezeLeft = freezeN;
+  let lastTplScore = 0;
 
   for(let fi=0; fi<frames.length; fi++){
     const f = frames[fi];
     const dt = (fi>0)? Math.max(1e-4, f.t - frames[fi-1].t) : 1/30;
     let src = cv.matFromImageData(f.img);
     let grayFull = new cv.Mat(); cv.cvtColor(src,grayFull,cv.COLOR_RGBA2GRAY);
+    let hsvFull = new cv.Mat(); cv.cvtColor(src,hsvFull,cv.COLOR_RGBA2HSV);
     const rect = new cv.Rect(Math.max(0,roi.x|0), Math.max(0,roi.y|0), Math.min(grayFull.cols - Math.max(0,roi.x|0), roi.w|0), Math.min(grayFull.rows - Math.max(0,roi.y|0), roi.h|0));
-    if (rect.width<=2 || rect.height<=2){ src.delete(); grayFull.delete(); break; }
+    if (rect.width<=2 || rect.height<=2){ src.delete(); grayFull.delete(); hsvFull.delete(); break; }
     let gray = grayFull.roi(rect);
-
     let predicted = gh.predict(dt); if (predicted[0]===null) predicted = lastPos;
 
     // TEMPLATE
@@ -498,7 +454,7 @@ function detectCenters(frames, roi){
     let bestScore=-1;
     for(let i=0;i<contours.size();i++){
       const c = contours.get(i); const area = cv.contourArea(c);
-      if(area<minA || area>maxA){ c.delete(); continue; }
+      if(area<Math.max(minA,areaMin) || area>Math.min(maxA,areaMax)){ c.delete(); continue; }
       const m = cv.moments(c,true);
       let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
       cx += rect.x; cy += rect.y;
@@ -511,192 +467,179 @@ function detectCenters(frames, roi){
     }
     work.delete(); kernel.delete(); contours.delete(); hier.delete();
 
-    // Fuse
-    const dTpl = tplBest ? Math.hypot(tplBest.x - predicted[0], tplBest.y - predicted[1]) : 1e9;
-    const dMot = motBest ? Math.hypot(motBest.x - predicted[0], motBest.y - predicted[1]) : 1e9;
-    let chosen = null;
-    if (tplBest && tplBest.score >= mthr && dTpl <= gatePx) chosen = {x:tplBest.x, y:tplBest.y};
-    else if (motBest && dMot <= gatePx*1.5) chosen = {x:motBest.x, y:motBest.y};
-    else if (tplBest && dTpl <= gatePx*2) chosen = {x:tplBest.x, y:tplBest.y};
-    else if (motBest) chosen = {x:motBest.x, y:motBest.y};
-    else chosen = {x: predicted[0], y: predicted[1]};
+    // COLOR assist (full ROI or large window on lost/reacq)
+    let colBest=null;
+    if (colorAssistEl.checked){
+      const mask = colorMask(grayFull, hsvFull);
+      if (mask){
+        const srect = (lostCount>0 && doReacq) ? new cv.Rect(Math.max(rect.x, (predicted[0]-reacqR)|0), Math.max(rect.y, (predicted[1]-reacqR)|0), Math.min(rect.width, (reacqR*2)), Math.min(rect.height, (reacqR*2))) : rect;
+        let mROI = mask.roi(srect);
+        const cnts = new cv.MatVector(), hr = new cv.Mat();
+        cv.findContours(mROI, cnts, hr, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        let best=-1;
+        for(let i=0;i<cnts.size();i++){
+          const c = cnts.get(i); const area = cv.contourArea(c);
+          if(area<Math.max(minA, areaMin*0.5) || area>Math.min(maxA, areaMax*2.2)){ c.delete(); continue; }
+          const m = cv.moments(c,true);
+          let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
+          cx += srect.x; cy += srect.y;
+          const rectB = cv.boundingRect(c);
+          const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
+          const d = Math.hypot(cx - predicted[0], cy - predicted[1]);
+          const sc = 1.0 + 0.8*circ + Math.min(1, area/(expArea||200)) + (d>0 ? (1/(1+d/40)) : 1.5);
+          if(sc>best){ best=sc; colBest={x:cx,y:cy}; }
+          c.delete();
+        }
+        cnts.delete(); hr.delete(); mask.delete(); mROI.delete();
+      }
+    }
 
-    const corr = gh.correct(chosen.x, chosen.y, dt);
-    const x = corr[0], y = corr[1];
-    lastPos = [x,y];
+    // Impact guard: detect drop in tplScore or sudden motion → freeze template updates for N frames
+    if (fi>1 && useTpl){
+      const drop = (lastTplScore - tplScore);
+      if (drop>0.25) freezeLeft = Math.max(freezeLeft, freezeN);
+    }
+    lastTplScore = tplScore;
+
+    // Fuse: template > color > motion > prediction with gating
+    let chosen = null;
+    const dTpl = tplBest ? Math.hypot(tplBest.x - predicted[0], tplBest.y - predicted[1]) : 1e9;
+    const dCol = colBest ? Math.hypot(colBest.x - predicted[0], colBest.y - predicted[1]) : 1e9;
+    const dMot = motBest ? Math.hypot(motBest.x - predicted[0], motBest.y - predicted[1]) : 1e9;
+
+    if (tplBest && tplBest.score >= mthr && dTpl <= gatePx) chosen = {x:tplBest.x, y:tplBest.y, src:'tpl'};
+    else if (colBest && dCol <= gatePx*1.6) chosen = {x:colBest.x, y:colBest.y, src:'col'};
+    else if (motBest && dMot <= gatePx*1.8) chosen = {x:motBest.x, y:motBest.y, src:'mot'};
+    else if (doReacq && colBest) chosen = {x:colBest.x, y:colBest.y, src:'colR'};
+    else chosen = {x:predicted[0], y:predicted[1], src:'pred'};
+
+    // Correct
+    const corr = new GHFilter(0.65,0.85);
+    corr.x = gh.x; corr.y = gh.y; corr.vx=gh.vx; corr.vy=gh.vy; // shallow copy
+    const xy = corr.correct(chosen.x, chosen.y, dt);
+    gh.x = corr.x; gh.y = corr.y; gh.vx=corr.vx; gh.vy=corr.vy;
+    const x = xy[0], y = xy[1];
+    lastPos=[x,y];
+
+    // Auto-update template AFTER impact freeze
+    if (useTpl && tplAutoEl.checked){
+      if (freezeLeft>0){ freezeLeft--; } else if (fi % 5 === 0){
+        const size = ballInit.w; const half=(size-1)/2;
+        const cx = Math.max(half, Math.min(overlay.width-half-1, x|0));
+        const cy = Math.max(half, Math.min(overlay.height-half-1, y|0));
+        const roiU = new cv.Rect(cx-half, cy-half, size, size);
+        let patch = grayFull.roi(roiU).clone();
+        ballInit.tpl.delete();
+        ballInit = {x: cx, y: cy, tpl: patch, w: size, h: size};
+      }
+    }
 
     centers.push({x,y,t:f.t, idx:f.idx});
-
-    if (showDuringEl.checked && (fi % 4 === 0)){
-      // live progress overlay while analyzing
-      ctx.putImageData(f.img, 0, 0);
-      drawOverlayFrame();
-      const sub = centers.slice(-80);
+    if (showDuringEl.checked && (fi % 3 === 0)){
+      ctx.putImageData(f.img,0,0); drawOverlayFrame();
+      const sub = centers.slice(Math.max(0, centers.length-120));
       drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
-      ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
+      ctx.save(); ctx.fillStyle='#4cd964'; ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.fill(); ctx.restore();
     }
 
     if (prevGray) prevGray.delete();
     prevGray = gray.clone();
-    gray.delete(); src.delete(); grayFull.delete();
-    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length} (tpl=${(tplScore>0?tplScore:0).toFixed(2)})`;
+    gray.delete(); src.delete(); grayFull.delete(); hsvFull.delete();
+
+    if (chosen.src==='pred') lostCount++; else lostCount = 0;
+    if (lostCount>5 && doReacq){ /* next loop uses wider color window via colR */ }
+
+    const tplTxt = (useTpl?`tpl=${tplScore.toFixed(2)}`:'tpl=–');
+    log(`Detecting ball: ${f.idx+1}/${frames.length} (${tplTxt}, src=${chosen.src})`);
   }
   if (prevGray) prevGray.delete();
   return centers;
 }
 
-/* ---------- Kinematics ---------- */
+/* ---------- Kinematics (ball scale / none) ---------- */
 function fitKinematicsBallScale(centers, m_per_px){
   if (!centers || centers.length<3 || !m_per_px) return null;
   const i0 = 0, i2 = Math.min(2, centers.length-1);
   const dt = Math.max(1e-4, centers[i2].t - centers[i0].t);
   const dx_px = centers[i2].x - centers[i0].x;
   const dy_px = centers[i2].y - centers[i0].y;
-  const v_pix = Math.hypot(dx_px, dy_px) / dt; // px/s
-  const v0 = v_pix * m_per_px; // m/s (approx)
+  const v_pix = Math.hypot(dx_px, dy_px) / dt;
+  const v0 = v_pix * m_per_px;
   const theta = Math.atan2(-dy_px, Math.abs(dx_px)+1e-6);
   const phi = 0;
   const carry_m = (v0*v0/9.80665)*Math.sin(2*theta)*0.65;
   return { v0, theta, phi, carry_m, n: centers.length };
 }
-function solveHomography(src4, dst4) {
-  const src = cv.matFromArray(4,1,cv.CV_32FC2, src4.flat());
-  const dst = cv.matFromArray(4,1,cv.CV_32FC2, dst4.flat());
-  const H = cv.findHomography(src, dst, cv.RANSAC, 5.0);
-  src.delete(); dst.delete();
-  if (!H || H.rows === 0 || H.cols === 0) throw new Error('Homography failed (empty).');
-  return H;
-}
 
 /* ---------- Analyze ---------- */
-analyzeBtn.onclick = async () => {
-  try {
-    analyzeBtn.disabled = true; playAnalyzedBtn.disabled = true;
-    why.textContent = 'Analyzing…';
-    const n = Math.max(6, Math.min(900, parseInt(numFramesEl.value||'180',10)));
-    const method = methodSel.value;
+analyzeBtn.onclick = async ()=>{
+  try{
+    analyzeBtn.disabled=true; playAnalyzedBtn.disabled=true; why.textContent='Analyzing…';
+    const n=Math.max(6, Math.min(1200, parseInt(numFramesEl.value||'200',10)));
+    const method=methodSel.value;
     let frames;
-    if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback && n <= 240)) {
-      frames = await extractFramesRVFC(n, showDuringEl.checked);
-    } else {
-      const dt = Math.max(1e-4, parseFloat(deltaTEl.value||'0.03333'));
-      frames = await extractFramesSeek(n, dt, showDuringEl.checked);
-    }
-    log(`Extracted ${frames.length} frames via ${method}`);
-    lastFrames = frames;
+    if (method==='rvfc' || (method==='auto' && !!video.requestVideoFrameCallback && n<=240)) frames=await extractFramesRVFC(n, showDuringEl.checked);
+    else { const dt=Math.max(1e-4, parseFloat(deltaTEl.value||'0.03333')); frames=await extractFramesSeek(n, dt, showDuringEl.checked); }
+    log(`Extracted ${frames.length} frames via ${method}`); lastFrames=frames;
 
-    if (!roiRect) { why.textContent = 'Set ROI first.'; analyzeBtn.disabled = false; return; }
-    if (!(ballInit && ballInit.tpl)) { why.textContent = 'Set Ball Init first.'; analyzeBtn.disabled = false; return; }
+    if (!roiRect){ why.textContent='Set ROI first.'; analyzeBtn.disabled=false; return; }
+    if (!(ballInit && ballInit.tpl)){ why.textContent='Set Ball Init first.'; analyzeBtn.disabled=false; return; }
+    if (scaleModeSel.value==='ball' && !m_per_px){ why.textContent='Set ball scale (drag diameter) or switch scale to None.'; analyzeBtn.disabled=false; return; }
 
     const centers = detectCenters(frames, roiRect);
     lastCenters = centers.slice();
-    if (centers.length < 4) { why.textContent = 'Could not track — adjust Ball Init/ROI/thresholds.'; analyzeBtn.disabled=false; return; }
+    if (centers.length<4){ why.textContent='Could not track — tune ROI/Template/Color Assist.'; analyzeBtn.disabled=false; return; }
 
-    // Basic kinematics (ball-scale or none). Tray mode omitted in v2 for simplicity.
-    let kin=null;
-    if (scaleModeSel.value === 'ball') {
-      if (!m_per_px) { why.textContent = 'Set ball scale (drag diameter) or switch scale to None.'; analyzeBtn.disabled=false; return; }
-      kin = fitKinematicsBallScale(centers, m_per_px);
-    } else if (scaleModeSel.value === 'none') {
-      kin = fitKinematicsBallScale(centers, 1.0); // px-units
-    } else {
-      why.textContent = 'Tray mode not active in v2; switch to Ball or None.';
-      analyzeBtn.disabled=false; return;
-    }
+    const kin = fitKinematicsBallScale(centers, scaleModeSel.value==='none'?1.0:m_per_px);
+    if (!kin){ why.textContent='Estimation failed.'; analyzeBtn.disabled=false; return; }
 
-    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; return; }
-
-    out.speed.textContent   = `${kin.v0.toFixed(1)} ${scaleModeSel.value==='none'?'px/s':'m/s'}${scaleModeSel.value==='none'?'':' ('+(kin.v0*2.237).toFixed(1)+' mph)'}`;
+    out.speed.textContent = `${kin.v0.toFixed(1)} ${scaleModeSel.value==='none'?'px/s':'m/s'}${scaleModeSel.value==='none'?'':' ('+(kin.v0*2.237).toFixed(1)+' mph)'}`;
     out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
     out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
     out.carry.textContent   = `${(kin.carry_m.toFixed(1))} ${scaleModeSel.value==='none'?'px':'m'}`;
     out.nframes.textContent = `${(kin.n)}`;
-    why.textContent = 'Done ✅ — overlay ready';
-
-    // Draw initial overlay snapshot (so you see trail immediately)
+    why.textContent='Done ✅ — overlay ready';
     overlayAtTime(analysisStartMediaTime + 1e-4);
 
-    playAnalyzedBtn.disabled = false; pauseBtn.disabled = false; stopBtn.disabled = false;
+    playAnalyzedBtn.disabled=false; pauseBtn.disabled=false; stopBtn.disabled=false;
     if (autoPlayEl.checked) playAnalyzedBtn.click();
-  } catch (err) {
-    console.error(err);
-    log('Error: ' + (err && err.message ? err.message : String(err)));
-    why.textContent = 'Error during analysis.';
-  } finally {
-    analyzeBtn.disabled = false;
-  }
+  }catch(err){ console.error(err); log('Error: '+(err && err.message?err.message:String(err))); why.textContent='Error during analysis.'; }
+  finally{ analyzeBtn.disabled=false; }
 };
 
-/* ---------- Analyzed playback (video + overlay together) ---------- */
+/* ---------- Playback ---------- */
 function overlayAtTime(now){
   drawOverlayFrame();
   if (!lastCenters.length) return;
-  const eps = 0.002;
-  const firstT = lastCenters[0].t;
-  const lastT = lastCenters[lastCenters.length-1].t;
-  const clamped = Math.min(Math.max(now, firstT), lastT+eps);
-  let i = 0;
-  // binary search would be faster; linear scan is fine at <2k points
-  while (i < lastCenters.length && lastCenters[i].t <= clamped) i++;
-  const sub = lastCenters.slice(0, Math.max(1,i));
+  const eps=0.002; const firstT=lastCenters[0].t; const lastT=lastCenters[lastCenters.length-1].t;
+  const clamped=Math.min(Math.max(now, firstT), lastT+eps);
+  let i=0; while(i<lastCenters.length && lastCenters[i].t <= clamped) i++;
+  const sub=lastCenters.slice(0, Math.max(1,i));
   drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
-  const curr = sub[sub.length-1];
-  ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(curr.x, curr.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
+  const curr=sub[sub.length-1]; ctx.save(); ctx.fillStyle='#4cd964'; ctx.beginPath(); ctx.arc(curr.x,curr.y,7,0,Math.PI*2); ctx.fill(); ctx.restore();
 }
-
-function rafLoop(){
-  if (!playingAnalyzed) return;
-  if (hasRVFC && video.requestVideoFrameCallback){
-    video.requestVideoFrameCallback((now, meta)=>{
-      overlayAtTime(meta.mediaTime);
-      rAFHandle = requestAnimationFrame(rafLoop);
-    });
-  } else {
-    overlayAtTime(video.currentTime);
-    rAFHandle = requestAnimationFrame(rafLoop);
-  }
-}
-
-playAnalyzedBtn.onclick = async () => {
-  if (!lastCenters.length) return;
-  playingAnalyzed = true;
-  video.currentTime = analysisStartMediaTime + 1e-4;
-  try { await video.play(); } catch(_){}
-  cancelAnimationFrame(rAFHandle);
-  rAFHandle = requestAnimationFrame(rafLoop);
-  pauseBtn.disabled = false; stopBtn.disabled = false;
-};
-pauseBtn.onclick = () => {
-  playingAnalyzed = false; try { video.pause(); } catch(_){}
-  cancelAnimationFrame(rAFHandle);
-  // Keep overlay frozen at current frame
-  overlayAtTime(video.currentTime);
-};
-stopBtn.onclick = () => {
-  playingAnalyzed = false; try { video.pause(); } catch(_){}
-  cancelAnimationFrame(rAFHandle);
-  try { video.currentTime = analysisStartMediaTime + 1e-4; } catch(_){}
-  overlayAtTime(analysisStartMediaTime + 1e-4);
-};
+function rafLoop(){ if(!playingAnalyzed) return; if(hasRVFC && video.requestVideoFrameCallback){ video.requestVideoFrameCallback((now,meta)=>{ overlayAtTime(meta.mediaTime); rAFHandle=requestAnimationFrame(rafLoop); }); } else { overlayAtTime(video.currentTime); rAFHandle=requestAnimationFrame(rafLoop); } }
+playAnalyzedBtn.onclick=async()=>{ if(!lastCenters.length) return; playingAnalyzed=true; video.currentTime=analysisStartMediaTime+1e-4; try{ await video.play(); }catch(_){ } cancelAnimationFrame(rAFHandle); rAFHandle=requestAnimationFrame(rafLoop); pauseBtn.disabled=false; stopBtn.disabled=false; };
+pauseBtn.onclick=()=>{ playingAnalyzed=false; try{ video.pause(); }catch(_){ } cancelAnimationFrame(rAFHandle); overlayAtTime(video.currentTime); };
+stopBtn.onclick=()=>{ playingAnalyzed=false; try{ video.pause(); }catch(_){ } cancelAnimationFrame(rAFHandle); try{ video.currentTime=analysisStartMediaTime+1e-4; }catch(_){ } overlayAtTime(analysisStartMediaTime+1e-4); };
 
 /* ---------- Status ---------- */
 function maybeEnable(){
   const okCV = window.cvReady && typeof cv !== 'undefined';
   const okVid = !!video.src && (video.readyState >= 2);
-  const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
+  const okROI = !!roiRect && roiRect.w>5 && roiRect.h>5;
   const okBall = !!(ballInit && ballInit.tpl);
-  const mode = scaleModeSel.value;
-  const scaleOK = (mode==='tray' ? (calibPts.length===4) : (mode==='ball' ? true : true));
   const rvfc = !!video.requestVideoFrameCallback;
-  why.textContent = `Status: OpenCV ${okCV?'✅':'❌'} • Video ${okVid?'✅':'❌'} • ROI ${okROI?'✅':'❌'} • BallInit ${okBall?'✅':'❌'} • Scale ${mode} • rVFC ${rvfc?'✅':'❌'}`;
+  const scaleOK = (scaleModeSel.value==='ball' ? !!m_per_px : true);
+  why.textContent = `Status: OpenCV ${okCV?'✅':'❌'} • Video ${okVid?'✅':'❌'} • ROI ${okROI?'✅':'❌'} • BallInit ${okBall?'✅':'❌'} • Scale ${scaleModeSel.value} ${scaleOK?'✅':'⚠️'} • rVFC ${rvfc?'✅':'❌'}`;
   analyzeBtn.disabled = !(okCV && okVid && okROI && okBall);
-  playAnalyzedBtn.disabled = lastCenters.length === 0;
+  playAnalyzedBtn.disabled = lastCenters.length===0;
   pauseBtn.disabled = !playingAnalyzed;
   stopBtn.disabled = !lastCenters.length;
 }
 
 /* ---------- Service worker ---------- */
-if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('./sw.js'); } catch(e){} }
+if ('serviceWorker' in navigator) { try{ navigator.serviceWorker.register('./sw.js'); }catch(e){} }
 </script>
 </body>
 </html>
