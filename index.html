@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Template Tracker + Trail (Video Load Hotfix)</title>
+<title>MP Launch Monitor — Template Tracker + Trail (No-Kalman Fallback)</title>
 <style>
   :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
@@ -26,7 +26,7 @@
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Template Tracker + Trail</h1>
+<h1>Motorized Precision • Launch Monitor — Template Tracker + Trail (Kalman‑less)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -53,7 +53,7 @@
       <option value="auto">Auto</option>
     </select>
   </label>
-  <label>Frames <input id="numFrames" type="number" value="150" min="6" max="900" style="width:90px"></label>
+  <label>Frames <input id="numFrames" type="number" value="180" min="6" max="900" style="width:90px"></label>
   <label>Δt (seek) <input id="deltaT" type="number" value="0.03333" step="0.0005" style="width:110px"><span class="status">≈1/30</span></label>
 </div>
 
@@ -61,25 +61,26 @@
   <button id="setBallBtn">Set Ball Init</button>
   <button id="clearBallBtn">Clear Ball</button>
   <label>Template size <input id="tplSize" type="number" value="25" min="11" max="81" step="2" style="width:80px"></label>
-  <label>Search radius <input id="searchRad" type="number" value="60" min="20" max="240" style="width:90px"></label>
-  <label>Match threshold <input id="matchThr" type="number" value="0.45" min="0.1" max="0.95" step="0.01" style="width:90px"></label>
+  <label>Search radius <input id="searchRad" type="number" value="90" min="20" max="240" style="width:90px"></label>
+  <label>Match threshold <input id="matchThr" type="number" value="0.38" min="0.1" max="0.95" step="0.01" style="width:90px"></label>
+  <label><input type="checkbox" id="tplAuto" checked> Auto‑update template</label>
 </div>
 
 <div class="row">
   <button id="setRoiBtn">Set Ball ROI</button>
   <button id="clearRoiBtn">Clear ROI</button>
   <button id="clearPtsBtn">Clear Calib Pts</button>
+  <label>Gate (px) <input id="gatePx" type="number" value="60" min="10" max="240" style="width:80px"></label>
 </div>
 
 <div class="row">
   <label><input type="checkbox" id="useTemplate" checked> Use template match</label>
   <label><input type="checkbox" id="useMotion" checked> Use motion diff</label>
-  <label>Gating (px) <input id="gatePx" type="number" value="60" min="10" max="240" style="width:80px"></label>
 </div>
 
 <div class="row">
   <label><input type="checkbox" id="showTrail" checked> Show trail</label>
-  <label>Trail length <input id="trailLen" type="number" value="200" min="10" max="1000" style="width:90px"></label>
+  <label>Trail length <input id="trailLen" type="number" value="220" min="10" max="1000" style="width:90px"></label>
   <label>Trail thickness <input id="trailThick" type="number" value="3" min="1" max="8" style="width:80px"></label>
   <label><input type="checkbox" id="showPred" checked> Predicted path</label>
   <button id="exportPngBtn">Export PNG</button>
@@ -99,8 +100,8 @@
 <div class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • CalibPoints 0/4 • ROI: ❌ • BallInit: ❌ • rVFC: ?</div>
 
 <video id="video" playsinline muted controls></video>
-<canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">NEW: Tap <b>Set Ball Init</b> and click the ball (ideally just before impact) to capture a template. The tracker then uses <b>template match</b> + <b>motion diff</b> gated by a Kalman filter, inside your ROI.</p>
+<canvas id="canvas" width="1080" height="1920"></canvas>
+<p class="status">If tracking drifts, lower <b>Match threshold</b> a bit (0.32–0.4), widen <b>Search radius</b>, or increase <b>Gate</b>. Keep ROI tight around the ball’s flight.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -153,6 +154,7 @@ const tplSizeEl = document.getElementById('tplSize');
 const searchRadEl = document.getElementById('searchRad');
 const matchThrEl = document.getElementById('matchThr');
 const gatePxEl = document.getElementById('gatePx');
+const tplAutoEl = document.getElementById('tplAuto');
 const why = document.getElementById('whyDisabled');
 const logEl = document.getElementById('log');
 
@@ -175,15 +177,15 @@ let objectURL = null;
 let trailPoints = []; // [{x,y}]
 let predictedPath = []; // [{x,y}]
 let lastH = null;
-let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 30fps
+let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 1080x1920 @ 30fps
 let ballInit = null; // {x,y, tpl: cv.Mat, w,h}
 let setBallMode = false;
 
 /* ---------- Logging ---------- */
 function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
 
-/* ---------- Utility: waits ---------- */
-function waitForEvent(el, type, timeout=10000){
+/* ---------- Wait helper ---------- */
+function waitForEvent(el, type, timeout=12000){
   return new Promise((resolve, reject)=>{
     const on = () => { cleanup(); resolve(); };
     const to = setTimeout(()=>{ cleanup(); reject(new Error(type+' timeout')); }, timeout);
@@ -287,23 +289,21 @@ canvas.addEventListener('pointerdown', (e) => {
   const {x,y} = canvasXY(e);
   if (setBallMode) {
     setBallMode = false;
-    // Build template from around (x,y)
     const size = Math.max(11, Math.min(81, (parseInt(tplSizeEl.value||'25',10)|1))); // odd
     const half = (size-1)/2;
-    // Clamp
     const cx = Math.max(half, Math.min(canvas.width-half-1, x|0));
     const cy = Math.max(half, Math.min(canvas.height-half-1, y|0));
     const roi = new cv.Rect(cx-half, cy-half, size, size);
-    // Grab current frame
     drawFrame();
     const frame = ctx.getImageData(0,0,canvas.width,canvas.height);
     let src = cv.matFromImageData(frame);
     let gray = new cv.Mat(); cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
     let tpl = gray.roi(roi).clone();
     src.delete(); gray.delete();
+    if (ballInit && ballInit.tpl) { ballInit.tpl.delete(); }
     ballInit = {x: cx, y: cy, tpl, w: size, h: size};
     log(`Ball template set @ (${cx}, ${cy}) size ${size}×${size}`);
-    drawFrame(); // show a marker
+    drawFrame();
     ctx.save(); ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(cx-half, cy-half, size, size); ctx.restore();
     maybeEnableAnalyze();
     return;
@@ -330,7 +330,7 @@ function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); cons
 
 /* ---------- Drawing ---------- */
 function drawFrame(drawTempRect=null) {
-  const vw = video.videoWidth || 1920, vh = video.videoHeight || 1080;
+  const vw = video.videoWidth || 1080, vh = video.videoHeight || 1920;
   canvas.width = vw; canvas.height = vh;
   ctx.drawImage(video, 0, 0, vw, vh);
   ctx.save();
@@ -345,7 +345,7 @@ function drawFrame(drawTempRect=null) {
     const half = (ballInit.w-1)/2;
     ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(ballInit.x-half, ballInit.y-half, ballInit.w, ballInit.h);
   }
-  // Trail (persistent)
+  // Trail
   if (showTrail.checked && trailPoints.length>1) drawTrail(trailPoints, Number(trailThick.value||3));
   // Predicted path
   if (showPred.checked && predictedPath.length>1) drawPredicted(predictedPath);
@@ -354,7 +354,7 @@ function drawFrame(drawTempRect=null) {
   ctx.restore();
 }
 function drawTrail(pts, thick){
-  const n = Math.min(pts.length, Number(trailLen.value||200));
+  const n = Math.min(pts.length, Number(trailLen.value||220));
   const start = pts.length - n;
   for(let i=start+1;i<pts.length;i++){
     const p0 = pts[i-1], p1 = pts[i];
@@ -412,12 +412,12 @@ function invertH(H){ const dst = new cv.Mat(); cv.invert(H, dst, cv.DECOMP_LU); 
 function applyHInv(Hinv, pt){ const [x,y]=pt; const h = Hinv.data64F||Hinv.data32F; const a=h[0]*x + h[1]*y + h[2], b=h[3]*x + h[4]*y + h[5], c=h[6]*x + h[7]*y + h[8]; return [a/c, b/c]; }
 
 /* ---------- Frame extraction ---------- */
-async function extractFramesSeek(n=150, dt=0.03333){
+async function extractFramesSeek(n=180, dt=0.03333){
   const frames=[]; let t=video.currentTime; const dur = video.duration || 1e9;
   for(let i=0;i<n;i++){ if (t > dur) break; video.currentTime = t; await new Promise(res=>{ video.onseeked = res; }); drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i}); why.textContent = `Sampling (seek): ${i+1}/${n}`; await new Promise(requestAnimationFrame); t += dt; }
   return frames;
 }
-async function extractFramesRVFC(n=150){
+async function extractFramesRVFC(n=180){
   const frames=[]; let count=0; let handle=0;
   const onframe = (now, meta) => {
     try{ drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count}); why.textContent = `Sampling (rVFC): ${count+1}/${n}`; count++; if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; } handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe)); }catch(e){ console.error(e); done(e); }
@@ -428,32 +428,46 @@ async function extractFramesRVFC(n=150){
   await p; return frames;
 }
 
-/* ---------- Tracker: template + motion + Kalman ---------- */
+/* ---------- Lightweight α‑β (g‑h) filter used when cv.KalmanFilter is unavailable ---------- */
+class GHFilter {
+  constructor(alpha=0.6, beta=0.8){
+    this.alpha = alpha; this.beta = beta;
+    this.x = null; this.y = null; this.vx = 0; this.vy = 0;
+  }
+  predict(dt){
+    if (this.x===null) return [null,null];
+    return [this.x + this.vx*dt, this.y + this.vy*dt];
+  }
+  correct(mx, my, dt){
+    if (this.x===null){ this.x = mx; this.y = my; this.vx = 0; this.vy = 0; return [this.x, this.y]; }
+    const px = this.x + this.vx*dt, py = this.y + this.vy*dt;
+    const rx = mx - px,           ry = my - py;
+    this.x = px + this.alpha * rx;
+    this.y = py + this.alpha * ry;
+    this.vx = this.vx + (this.beta/dt) * rx;
+    this.vy = this.vy + (this.beta/dt) * ry;
+    return [this.x, this.y];
+  }
+}
+
+/* ---------- Tracker: template + motion + GHFilter gating ---------- */
 function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
   trailPoints = []; // reset trail
-  // Kalman
-  const kf = new cv.KalmanFilter(4,2,0);
-  const dt0 = (frames.length>1) ? Math.max(1e-4, (frames[1].t - frames[0].t)) : 1/30;
-  kf.transitionMatrix = cv.matFromArray(4,4,cv.CV_32F,[1,0,dt0,0, 0,1,0,dt0, 0,0,1,0, 0,0,0,1]);
-  kf.measurementMatrix = cv.matFromArray(2,4,cv.CV_32F,[1,0,0,0, 0,1,0,0]);
-  cv.setIdentity(kf.processNoiseCov, new cv.Scalar(1e-2));
-  cv.setIdentity(kf.measurementNoiseCov, new cv.Scalar(4e-1));
-  cv.setIdentity(kf.errorCovPost, new cv.Scalar(1));
-
   const minA = (window.MP_DET && window.MP_DET.minA) || 8;
   const maxA = (window.MP_DET && window.MP_DET.maxA) || 600;
   const useTpl = useTemplate.checked && ballInit && ballInit.tpl;
   const useMot = useMotion.checked;
   const gatePx = Math.max(10, parseInt(gatePxEl.value||'60',10));
+  const tplAuto = tplAutoEl.checked;
   const tplSize = ballInit ? ballInit.w : Math.max(11, parseInt(tplSizeEl.value||'25',10)|1);
-  const tplHalf = (tplSize-1)/2;
-  let predicted=[roi.x+roi.w/2, roi.y+roi.h/2];
-  let hasInit=false;
+  const mthr = parseFloat(matchThrEl.value||'0.38');
+  const gh = new GHFilter(0.65, 0.85);
+  let lastPos = ballInit ? [ballInit.x, ballInit.y] : [roi.x+roi.w/2, roi.y+roi.h/2];
 
   for(let fi=0; fi<frames.length; fi++){
     const f = frames[fi];
-    // Gray + ROI
+    const dt = (fi>0)? Math.max(1e-4, f.t - frames[fi-1].t) : 1/30;
     let src = cv.matFromImageData(f.img);
     let grayFull = new cv.Mat(); cv.cvtColor(src,grayFull,cv.COLOR_RGBA2GRAY);
     const rect = new cv.Rect(Math.max(0,roi.x|0), Math.max(0,roi.y|0), Math.min(grayFull.cols - Math.max(0,roi.x|0), roi.w|0), Math.min(grayFull.rows - Math.max(0,roi.y|0), roi.h|0));
@@ -461,43 +475,34 @@ function detectCenters(frames, roi){
     let gray = grayFull.roi(rect);
 
     // Predict
-    const dt = (fi>0)? Math.max(1e-4, f.t - frames[fi-1].t) : dt0;
-    kf.transitionMatrix.data32F.set([1,0,dt,0, 0,1,0,dt, 0,0,1,0, 0,0,0,1]);
-    const pred = kf.predict(); predicted = [pred.data32F[0], pred.data32F[1]];
+    let predicted = gh.predict(dt);
+    if (predicted[0]===null) predicted = lastPos;
 
-    // Candidate 1: TEMPLATE MATCH inside a search window
+    // TEMPLATE MATCH around last or predicted
     let tplBest=null, tplScore=-1;
     if (useTpl){
-      // Build template (from stored or current ballInit)
-      const tplMat = ballInit.tpl; // grayscale mat
-      // Search window around predicted or last known
-      const cx = centers.length ? centers[centers.length-1].x : (ballInit ? ballInit.x : (rect.x + rect.width/2));
-      const cy = centers.length ? centers[centers.length-1].y : (ballInit ? ballInit.y : (rect.y + rect.height/2));
-      const r = Math.max(20, parseInt(searchRadEl.value||'60',10));
+      const cx = lastPos[0], cy = lastPos[1];
+      const r = Math.max(20, parseInt(searchRadEl.value||'90',10));
       const sx = Math.max(rect.x, (cx - r)|0), sy = Math.max(rect.y, (cy - r)|0);
       const ex = Math.min(rect.x+rect.width,  cx + r), ey = Math.min(rect.y+rect.height, cy + r);
-      const sw = Math.max( tplMat.cols+1, ex - sx ), sh = Math.max( tplMat.rows+1, ey - sy );
+      const sw = Math.max((ballInit.tpl.cols||tplSize)+1, ex - sx), sh = Math.max((ballInit.tpl.rows||tplSize)+1, ey - sy);
       const srect = new cv.Rect(sx, sy, sw, sh);
       let search = grayFull.roi(srect);
       let res = new cv.Mat();
-      cv.matchTemplate(search, tplMat, res, cv.TM_CCOEFF_NORMED);
+      cv.matchTemplate(search, ballInit.tpl, res, cv.TM_CCOEFF_NORMED);
       const mm = cv.minMaxLoc(res);
       const topLeft = { x: srect.x + mm.maxLoc.x, y: srect.y + mm.maxLoc.y };
       tplScore = mm.maxVal;
-      tplBest = { x: topLeft.x + tplMat.cols/2, y: topLeft.y + tplMat.rows/2, score: tplScore };
+      tplBest = { x: topLeft.x + (ballInit.tpl.cols/2), y: topLeft.y + (ballInit.tpl.rows/2), score: tplScore };
       res.delete(); search.delete();
-      // draw search box
-      // (Optional — comment if too verbose)
-      // drawFrame(); ctx.save(); ctx.strokeStyle='#ffd166aa'; ctx.setLineDash([5,4]); ctx.strokeRect(srect.x,srect.y,srect.width,srect.height); ctx.setLineDash([]); ctx.restore();
     }
 
-    // Candidate 2: MOTION DIFF in ROI (prevGray vs gray)
+    // MOTION DIFF in ROI
     let motBest=null;
     if (useMot){
       let work = new cv.Mat();
       if(prevGray){ cv.absdiff(gray,prevGray,work); } else { work = gray.clone(); }
       cv.GaussianBlur(work,work,new cv.Size(3,3),0);
-      // Adaptive threshold via Otsu on ROI to be more robust
       cv.threshold(work,work,0,255,cv.THRESH_BINARY|cv.THRESH_OTSU);
       const kernel = cv.Mat.ones(3,3,cv.CV_8U); cv.morphologyEx(work,work,cv.MORPH_OPEN,kernel);
       const contours = new cv.MatVector(), hier = new cv.Mat();
@@ -519,50 +524,44 @@ function detectCenters(frames, roi){
       work.delete(); kernel.delete(); contours.delete(); hier.delete();
     }
 
-    // Fuse candidates with gating
-    let chosen = null, mscore = (useTpl?tplScore:-1);
-    const mthr = parseFloat(matchThrEl.value||'0.45');
+    // Fuse
     const dTpl = tplBest ? Math.hypot(tplBest.x - predicted[0], tplBest.y - predicted[1]) : 1e9;
     const dMot = motBest ? Math.hypot(motBest.x - predicted[0], motBest.y - predicted[1]) : 1e9;
+    let chosen = null;
+    if (useTpl && tplBest && tplBest.score >= mthr && dTpl <= gatePx) chosen = {x:tplBest.x, y:tplBest.y};
+    else if (useMot && motBest && dMot <= gatePx*1.5) chosen = {x:motBest.x, y:motBest.y};
+    else if (useTpl && tplBest && dTpl <= gatePx*2) chosen = {x:tplBest.x, y:tplBest.y};
+    else if (useMot && motBest) chosen = {x:motBest.x, y:motBest.y};
+    else chosen = {x: predicted[0], y: predicted[1]};
 
-    if (useTpl && tplBest && tplBest.score >= mthr && dTpl <= gatePx) {
-      chosen = {x: tplBest.x, y: tplBest.y};
-    } else if (useMot && motBest && dMot <= gatePx*1.5) {
-      chosen = {x: motBest.x, y: motBest.y};
-    } else if (useTpl && tplBest) {
-      // Accept weaker match if we have nothing else, but within 2*gate
-      if (dTpl <= gatePx*2) chosen = {x: tplBest.x, y: tplBest.y};
-    } else if (useMot && motBest) {
-      chosen = {x: motBest.x, y: motBest.y};
-    } else {
-      // fall back to prediction
-      chosen = {x: predicted[0], y: predicted[1]};
-    }
+    // α‑β filter correction
+    const corr = gh.correct(chosen.x, chosen.y, dt);
+    const x = corr[0], y = corr[1];
+    lastPos = [x,y];
 
-    // Kalman correct
-    if(!hasInit){
-      kf.statePost = cv.matFromArray(4,1,cv.CV_32F,[chosen.x, chosen.y, 0,0]); hasInit=true;
+    // Optional auto‑update template to adapt blur/lighting/scale
+    if (useTpl && tplAuto && (fi % 5 === 0)) {
+      const size = tplSize;
+      const half = (size-1)/2;
+      const cx = Math.max(half, Math.min(canvas.width-half-1, x|0));
+      const cy = Math.max(half, Math.min(canvas.height-half-1, y|0));
+      const roiU = new cv.Rect(cx-half, cy-half, size, size);
+      let g2 = grayFull; // full gray
+      let patch = g2.roi(roiU).clone();
+      if (ballInit && ballInit.tpl) ballInit.tpl.delete();
+      ballInit = {x: cx, y: cy, tpl: patch, w: size, h: size};
     }
-    const meas = cv.matFromArray(2,1,cv.CV_32F,[chosen.x, chosen.y]);
-    const corr = kf.correct(meas);
-    const x = corr.data32F[0], y = corr.data32F[1];
-    meas.delete(); corr.delete();
 
     centers.push({x,y,t:f.t, idx:f.idx});
     trailPoints.push({x,y});
     if (showTrail.checked) { drawFrame(); drawTrail(trailPoints, Number(trailThick.value||3)); }
-    // Draw current marker + template box
-    if (ballInit && ballInit.tpl) {
-      const half = (ballInit.w-1)/2;
-      ctx.save(); ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(x-half, y-half, ballInit.w, ballInit.h); ctx.restore();
-    }
     ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
 
     // Prepare prevGray
     if (prevGray) prevGray.delete();
     prevGray = gray.clone();
-    gray.delete(); src.delete(); grayFull.delete(); pred.delete();
-    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length} (match=${mscore.toFixed(2)})`;
+    gray.delete(); src.delete(); grayFull.delete();
+    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length} (tpl=${(tplBest?tplBest.score:0).toFixed(2)})`;
   }
   if (prevGray) prevGray.delete();
   return centers;
@@ -619,7 +618,7 @@ analyzeBtn.onclick = async () => {
     const [W,H] = calibMeters();
     const dst = [[0,0],[0,H],[W,H],[W,0]];
     const Hm = solveHomography(calibPts, dst);
-    const n = Math.max(6, Math.min(900, parseInt(numFramesEl.value||'150',10)));
+    const n = Math.max(6, Math.min(900, parseInt(numFramesEl.value||'180',10)));
     const method = methodSel.value;
     let frames;
     if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback && n <= 240)) {
@@ -636,7 +635,7 @@ analyzeBtn.onclick = async () => {
     lastCenters = centers.slice();
     previewBtn.disabled = (centers.length === 0);
 
-    if (centers.length < 4) { why.textContent = 'Could not track — adjust Ball Init, expand ROI, brighten light, or tune thresholds.'; analyzeBtn.disabled = false; Hm.delete(); return; }
+    if (centers.length < 4) { why.textContent = 'Could not track — adjust Ball Init, widen ROI, brighten light, or tune thresholds.'; analyzeBtn.disabled = false; Hm.delete(); return; }
     why.textContent = 'Fitting short-arc trajectory…';
     const kin = fitKinematics(centers, Hm);
     if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; Hm.delete(); return; }
@@ -668,10 +667,8 @@ previewBtn.onclick = async () => {
     const f = lastFrames[c.idx] || lastFrames[lastFrames.length-1];
     ctx.putImageData(f.img, 0, 0);
     drawFrame(); // draws ROI, existing trail & predicted
-    // Draw trail up to i
     const subTrail = lastCenters.slice(0, i+1).map(p=>({x:p.x,y:p.y}));
     drawTrail(subTrail, Number(trailThick.value||3));
-    // Current marker
     ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(c.x, c.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
     await new Promise(r => setTimeout(r, 30));
   }
@@ -681,17 +678,6 @@ previewBtn.onclick = async () => {
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeEnableAnalyze(); });
 
 /* ---------- Helpers ---------- */
-function maybeEnableAnalyze() {
-  const okCV = window.cvReady && typeof cv !== 'undefined';
-  const okVid = !!video.src && (video.readyState >= 2);
-  const okPts = calibPts.length === 4;
-  const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
-  const okBall = !!(ballInit && ballInit.tpl);
-  const hasRVFC = !!video.requestVideoFrameCallback;
-  analyzeBtn.disabled = !(okCV && okVid && okPts && okROI);
-  previewBtn.disabled = lastCenters.length === 0;
-  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • CalibPoints ${calibPts.length}/4 • ROI: ${okROI?'✅':'❌'} • BallInit: ${okBall?'✅':'❌'} • rVFC: ${hasRVFC ? '✅' : '❌'}`;
-}
 function canvasXY(e){ const r = canvas.getBoundingClientRect(); const x = (e.clientX - r.left) * canvas.width / r.width; const y = (e.clientY - r.top) * canvas.height / r.height; return {x,y}; }
 function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
 function tempRect(a,b){ return normRect(a,b); }
