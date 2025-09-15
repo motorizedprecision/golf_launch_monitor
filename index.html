@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Mac Safari (ROI + 240)</title>
+<title>MP Launch Monitor — ROI (30fps tuned)</title>
 <style>
-  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
+  :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
   h1 { color: var(--brand); font-size: 20px; margin: 0 0 12px 0; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
@@ -24,7 +24,7 @@
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Mac Safari (ROI + 240)</h1>
+<h1>Motorized Precision • Launch Monitor — ROI (30 fps tuned)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -41,14 +41,14 @@
 <div class="row">
   <label>Method
     <select id="method">
-      <option value="auto">Auto (prefer rVFC)</option>
+      <option value="seek" selected>Time‑step (best for 30 fps)</option>
       <option value="rvfc">rVFC</option>
-      <option value="seek">Time‑step</option>
+      <option value="auto">Auto</option>
     </select>
   </label>
-  <label>Frames <input id="numFrames" type="number" value="240" min="6" max="600" style="width:90px"></label>
-  <label>Δt (seek) <input id="deltaT" type="number" value="0.00417" step="0.0005" style="width:110px"><span class="status">≈1/240</span></label>
-  <span class="badge">Scale = tray/paper only • Ball uses ROI</span>
+  <label>Frames <input id="numFrames" type="number" value="150" min="6" max="600" style="width:90px"></label>
+  <label>Δt (seek) <input id="deltaT" type="number" value="0.03333" step="0.0005" style="width:110px"><span class="status">≈1/30</span></label>
+  <span class="badge">Scale = tray/paper • Ball = ROI</span>
 </div>
 
 <div class="row">
@@ -68,7 +68,7 @@
 
 <video id="video" playsinline muted controls></video>
 <canvas id="canvas" width="1920" height="1080"></canvas>
-<p class="status">Step 1: Tap 4 corners of tray/paper for scale. Step 2: Click <b>Set Ball ROI</b> and drag a box around the ball’s flight region. Analyze samples up to N frames and restricts detection to your ROI.</p>
+<p class="status">Tap 4 tray/paper corners (scale), then draw the Ball ROI box. Defaults tuned for 30 fps: frames=150, Δt=0.03333.</p>
 
 <div class="stats">
   <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
@@ -82,15 +82,8 @@
 <div id="log" class="mono">—</div>
 
 <script>
-  // Ensure OpenCV init flag exists BEFORE loading script
   window.cvReady = false;
-  window.Module = {
-    onRuntimeInitialized() {
-      window.cvReady = true;
-      log('OpenCV ready ✅');
-      maybeEnableAnalyze();
-    }
-  };
+  window.Module = { onRuntimeInitialized() { window.cvReady = true; log('OpenCV ready ✅'); maybeEnableAnalyze(); } };
 </script>
 <script src="https://docs.opencv.org/4.x/opencv.js"></script>
 
@@ -123,12 +116,14 @@ const out = {
   nframes: document.getElementById('nframes')
 };
 
-let calibPts = []; // four [x,y] for scale plane
+let calibPts = []; // 4 pts for scale
 let roiRect = null; // {x,y,w,h}
 let roiMode = false;
 let roiStart = null;
 let lastCenters = []; // for preview
 let lastFrames = [];  // for preview
+let minAreaFrac = 0.000020;
+let maxAreaFrac = 0.003000;
 
 function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
 
@@ -144,12 +139,17 @@ fileInput.onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   log('Video selected: ' + (file.name || '(blob)'));
-  video.muted = true; // prime autoplay policy
+  video.muted = true;
   video.src = URL.createObjectURL(file);
   await video.play().catch(()=>{});
   video.pause();
   video.currentTime = 0.03;
   await new Promise(res => { video.onseeked = res; });
+  const area = Math.max(1, (video.videoWidth||1920) * (video.videoHeight||1080));
+  const minA = Math.max(6, Math.floor(area * minAreaFrac));
+  const maxA = Math.max(minA+1, Math.floor(area * maxAreaFrac));
+  log(`Detection area bounds: min≈${minA}, max≈${maxA}`);
+  window.MP_DET = {minA, maxA};
   drawFrame(); calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[];
   maybeEnableAnalyze();
 };
@@ -170,70 +170,31 @@ primeBtn.onclick = async () => {
 /* ---- Canvas interactions ---- */
 canvas.addEventListener('pointerdown', (e) => {
   const {x,y} = canvasXY(e);
-  if (roiMode) {
-    roiStart = {x,y};
-  } else if (calibPts.length < 4) {
-    calibPts.push([x,y]);
-    drawFrame();
-    log(`Calib point ${calibPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`);
-    maybeEnableAnalyze();
-  }
+  if (roiMode) { roiStart = {x,y}; }
+  else if (calibPts.length < 4) { calibPts.push([x,y]); drawFrame(); log(`Calib point ${calibPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`); maybeEnableAnalyze(); }
 });
-canvas.addEventListener('pointermove', (e) => {
-  if (!roiMode || !roiStart) return;
-  drawFrame(tempRect(roiStart, canvasXY(e)));
-});
-canvas.addEventListener('pointerup', (e) => {
-  if (!roiMode || !roiStart) return;
-  roiRect = normRect(roiStart, canvasXY(e));
-  roiStart = null; roiMode = false;
-  drawFrame();
-  log(`ROI set: x=${roiRect.x|0}, y=${roiRect.y|0}, w=${roiRect.w|0}, h=${roiRect.h|0}`);
-  maybeEnableAnalyze();
-});
+canvas.addEventListener('pointermove', (e) => { if (!roiMode || !roiStart) return; drawFrame(tempRect(roiStart, canvasXY(e))); });
+canvas.addEventListener('pointerup',   (e) => { if (!roiMode || !roiStart) return; roiRect = normRect(roiStart, canvasXY(e)); roiStart = null; roiMode = false; drawFrame(); log(`ROI set: x=${roiRect.x|0}, y=${roiRect.y|0}, w=${roiRect.w|0}, h=${roiRect.h|0}`); maybeEnableAnalyze(); });
 
 setRoiBtn.onclick = () => { roiMode = true; log('Draw ROI on canvas (drag)...'); };
 clearRoiBtn.onclick = () => { roiRect = null; drawFrame(); log('Cleared ROI'); maybeEnableAnalyze(); };
 clearPtsBtn.onclick = () => { calibPts = []; drawFrame(); log('Cleared calibration points'); maybeEnableAnalyze(); };
 
-function canvasXY(e){
-  const r = canvas.getBoundingClientRect();
-  const x = (e.clientX - r.left) * canvas.width / r.width;
-  const y = (e.clientY - r.top) * canvas.height / r.height;
-  return {x,y};
-}
+function canvasXY(e){ const r = canvas.getBoundingClientRect(); const x = (e.clientX - r.left) * canvas.width / r.width; const y = (e.clientY - r.top) * canvas.height / r.height; return {x,y}; }
 function tempRect(a,b){ return normRect(a,b); }
-function normRect(a,b){
-  const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y);
-  const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y);
-  return {x,y,w,h};
-}
+function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
 
 /* ---- Drawing ---- */
 function drawFrame(drawTempRect=null) {
   const vw = video.videoWidth || 1920, vh = video.videoHeight || 1080;
   canvas.width = vw; canvas.height = vh;
   ctx.drawImage(video, 0, 0, vw, vh);
-  // calibration points
   ctx.save();
   ctx.fillStyle = '#ff725c'; ctx.strokeStyle = '#ff725c'; ctx.lineWidth = 3;
   calibPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
-  if (calibPts.length === 4) {
-    ctx.beginPath();
-    ctx.moveTo(calibPts[0][0], calibPts[0][1]);
-    for (let i=1;i<4;i++) ctx.lineTo(calibPts[i][0], calibPts[i][1]);
-    ctx.closePath(); ctx.stroke();
-  }
-  // ROI rect
-  if (roiRect) {
-    ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3;
-    ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h);
-  }
-  if (drawTempRect) {
-    ctx.setLineDash([6,6]); ctx.strokeStyle = '#4cd964aa'; ctx.lineWidth = 2;
-    ctx.strokeRect(drawTempRect.x, drawTempRect.y, drawTempRect.w, drawTempRect.h);
-    ctx.setLineDash([]);
-  }
+  if (calibPts.length === 4) { ctx.beginPath(); ctx.moveTo(calibPts[0][0], calibPts[0][1]); for (let i=1;i<4;i++) ctx.lineTo(calibPts[i][0], calibPts[i][1]); ctx.closePath(); ctx.stroke(); }
+  if (roiRect) { ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h); }
+  if (drawTempRect) { ctx.setLineDash([6,6]); ctx.strokeStyle = '#4cd964aa'; ctx.lineWidth = 2; ctx.strokeRect(drawTempRect.x, drawTempRect.y, drawTempRect.w, drawTempRect.h); ctx.setLineDash([]); }
   ctx.restore();
 }
 
@@ -250,13 +211,10 @@ function maybeEnableAnalyze() {
 
 /* ---- Calibration geometry ---- */
 function calibMeters() {
-  if (markerSel.value === 'tray')   return [0.34, 0.25]; // width x depth in meters
+  if (markerSel.value === 'tray')   return [0.34, 0.25];
   if (markerSel.value === 'letter') return [0.2159, 0.2794];
   if (markerSel.value === 'a4')     return [0.2100, 0.2970];
-  if (markerSel.value === 'custom') {
-    const w = parseFloat(customW.value||'0'); const h = parseFloat(customH.value||'0');
-    if (w>0 && h>0) return [w,h];
-  }
+  if (markerSel.value === 'custom') { const w = parseFloat(customW.value||'0'); const h = parseFloat(customH.value||'0'); if (w>0 && h>0) return [w,h]; }
   return [0.2159, 0.2794];
 }
 function solveHomography(src4, dst4) {
@@ -267,80 +225,34 @@ function solveHomography(src4, dst4) {
   if (!H || H.rows === 0 || H.cols === 0) throw new Error('Homography failed (empty).');
   return H;
 }
-function applyH(H, pt) {
-  const [u,v]=pt; const h = H.data64F||H.data32F;
-  if (!h) throw new Error('Homography data missing.');
-  const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8];
-  return [a/c, b/c];
-}
+function applyH(H, pt) { const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
 
 /* ---- Frame extraction ---- */
-async function extractFramesSeek(n=240, dt=1/240){
+async function extractFramesSeek(n=150, dt=0.03333){
   const frames=[]; let t=video.currentTime; const dur = video.duration || 1e9;
-  for(let i=0;i<n;i++){
-    if (t > dur) break;
-    video.currentTime = t;
-    await new Promise(res=>{ video.onseeked = res; });
-    drawFrame();
-    frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i});
-    why.textContent = `Sampling (seek): ${i+1}/${n}`;
-    await new Promise(requestAnimationFrame);
-    t += dt;
-  }
+  for(let i=0;i<n;i++){ if (t > dur) break; video.currentTime = t; await new Promise(res=>{ video.onseeked = res; }); drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i}); why.textContent = `Sampling (seek): ${i+1}/${n}`; await new Promise(requestAnimationFrame); t += dt; }
   return frames;
 }
-async function extractFramesRVFC(n=240){
+async function extractFramesRVFC(n=150){
   const frames=[]; let count=0; let handle=0;
   const onframe = (now, meta) => {
-    try{
-      drawFrame();
-      frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count});
-      why.textContent = `Sampling (rVFC): ${count+1}/${n}`;
-      count++;
-      if (count >= n) {
-        video.pause();
-        cancelAnimationFrame(handle);
-        done();
-        return;
-      }
-      handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
-    }catch(e){ console.error(e); done(e); }
+    try{ drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count}); why.textContent = `Sampling (rVFC): ${count+1}/${n}`; count++; if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; } handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe)); }catch(e){ console.error(e); done(e); }
   };
-  let doneResolve, doneReject;
-  const done = (err) => { err ? doneReject(err) : doneResolve(); };
-  const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
-  video.muted = true; video.playbackRate = 0.1;
-  await video.play().catch(()=>{});
+  let doneResolve, doneReject; const done = (err) => { err ? doneReject(err) : doneResolve(); }; const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
+  video.muted = true; video.playbackRate = 0.1; await video.play().catch(()=>{});
   handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
-  await p;
-  return frames;
+  await p; return frames;
 }
 
-/* ---- Detection restricted to ROI + simple Kalman gating ---- */
+/* ---- Detection in ROI with area gates ---- */
 function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
-  // Simple CV Kalman: state [x,y,vx,vy]
-  const kf = new cv.KalmanFilter(4,2,0);
-  let dt0 = (frames.length>1) ? Math.max(1e-4, (frames[1].t - frames[0].t)) : (1/240);
-  kf.transitionMatrix = cv.matFromArray(4,4,cv.CV_32F,[1,0,dt0,0, 0,1,0,dt0, 0,0,1,0, 0,0,0,1]);
-  kf.measurementMatrix = cv.matFromArray(2,4,cv.CV_32F,[1,0,0,0, 0,1,0,0]);
-  cv.setIdentity(kf.processNoiseCov, new cv.Scalar(1e-2));
-  cv.setIdentity(kf.measurementNoiseCov, new cv.Scalar(3e-1));
-  cv.setIdentity(kf.errorCovPost, new cv.Scalar(1));
-  let hasInit=false;
-  let predicted=[roi.x+roi.w/2, roi.y+roi.h/2];
-
-  for(let fi=0; fi<frames.length; fi++){
-    const f = frames[fi];
-    const dt = (fi>0)? Math.max(1e-4, f.t - frames[fi-1].t) : dt0;
-    // Update transition for variable dt
-    kf.transitionMatrix.data32F.set([1,0,dt,0, 0,1,0,dt, 0,0,1,0, 0,0,0,1]);
-    // Build grayscale full and ROI
+  const minA = (window.MP_DET && window.MP_DET.minA) || 8;
+  const maxA = (window.MP_DET && window.MP_DET.maxA) || 600;
+  for(const f of frames){
     let src = cv.matFromImageData(f.img);
     let grayFull = new cv.Mat(); cv.cvtColor(src,grayFull,cv.COLOR_RGBA2GRAY);
-    const rect = new cv.Rect(Math.max(0,roi.x|0), Math.max(0,roi.y|0),
-                             Math.min(grayFull.cols - Math.max(0,roi.x|0), roi.w|0),
-                             Math.min(grayFull.rows - Math.max(0,roi.y|0), roi.h|0));
+    const rect = new cv.Rect(Math.max(0,roi.x|0), Math.max(0,roi.y|0), Math.min(grayFull.cols - Math.max(0,roi.x|0), roi.w|0), Math.min(grayFull.rows - Math.max(0,roi.y|0), roi.h|0));
     if (rect.width<=2 || rect.height<=2){ src.delete(); grayFull.delete(); break; }
     let gray = grayFull.roi(rect);
     let work = new cv.Mat();
@@ -353,84 +265,33 @@ function detectCenters(frames, roi){
     let best=null, bestScore=-1;
     for(let i=0;i<contours.size();i++){
       const c = contours.get(i); const area = cv.contourArea(c);
-      if(area<12 || area>2500){ c.delete(); continue; }
+      if(area<minA || area>maxA){ c.delete(); continue; }
       const m = cv.moments(c,true);
       let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
-      // Convert ROI coords → image coords
       cx += rect.x; cy += rect.y;
-      // Score: near-circular + proximity to predicted
       const rectB = cv.boundingRect(c);
       const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
-      const dx = cx - predicted[0], dy = cy - predicted[1];
-      const dist = Math.hypot(dx,dy);
-      const score = circ + Math.min(1, area/250.0) + (dist>0 ? (1/ (1+dist/50)) : 1.5);
+      const score = circ + Math.min(1, area/250.0);
       if(score>bestScore){ bestScore=score; best={x:cx,y:cy,t:f.t, idx:f.idx}; }
       c.delete();
     }
-    // Kalman update
-    if(!hasInit){
-      kf.statePost = cv.matFromArray(4,1,cv.CV_32F,[best?best.x:predicted[0], best?best.y:predicted[1], 0,0]);
-      hasInit=true;
+    if(best) {
+      centers.push(best);
+      if (debugOverlay.checked) { drawFrame(); ctx.save(); ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roi.x, roi.y, roi.w, roi.h); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(best.x, best.y, 8, 0, Math.PI*2); ctx.fill(); ctx.restore(); }
     }
-    const pred = kf.predict();
-    predicted = [pred.data32F[0], pred.data32F[1]];
-
-    if(best){
-      const meas = cv.matFromArray(2,1,cv.CV_32F,[best.x,best.y]);
-      const corr = kf.correct(meas);
-      const x = corr.data32F[0], y = corr.data32F[1];
-      centers.push({x,y,t:f.t, idx:f.idx});
-      meas.delete(); corr.delete();
-      if (debugOverlay.checked) drawFrameRectAndDot(roiRect, [x,y]);
-    } else {
-      // No detection: keep prediction as a weak measurement
-      const meas = cv.matFromArray(2,1,cv.CV_32F,[predicted[0],predicted[1]]);
-      const corr = kf.correct(meas);
-      const x = corr.data32F[0], y = corr.data32F[1];
-      centers.push({x,y,t:f.t, idx:f.idx});
-      meas.delete(); corr.delete();
-      if (debugOverlay.checked) drawFrameRectAndDot(roiRect, [x,y]);
-    }
-    // Prepare prevGray
+    src.delete(); grayFull.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete();
     if (prevGray) prevGray.delete();
-    prevGray = new cv.Mat(); gray.copyTo(prevGray);
-    // Cleanup
-    src.delete(); gray.delete(); grayFull.delete(); work.delete(); kernel.delete(); contours.delete(); hier.delete(); pred.delete();
+    prevGray = gray;
+    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length}`;
   }
   if (prevGray) prevGray.delete();
   return centers;
 }
 
-function drawFrameRectAndDot(rr, dot){
-  drawFrame();
-  if (rr) {
-    ctx.save();
-    ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3;
-    ctx.strokeRect(rr.x, rr.y, rr.w, rr.h);
-    ctx.fillStyle = '#4cd964';
-    ctx.beginPath(); ctx.arc(dot[0], dot[1], 8, 0, Math.PI*2); ctx.fill();
-    ctx.restore();
-  }
-}
-
 /* ---- Kinematics ---- */
 function estimateCarry(v0, theta, drag=0.75){ const g=9.80665; return (v0*v0/g)*Math.sin(2*theta)*drag; }
-
-function fitKinematics(centers, H){
-  const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t]));
-  const i0=0, i2=Math.min(2, ground.length-1);
-  if (i2 <= i0) return null;
-  const dt = ground[i2][2] - ground[i0][2] || (1/240);
-  const vx = (ground[i2][0]-ground[i0][0]) / dt;
-  const vy = (ground[i2][1]-ground[i0][1]) / dt;
-  const vxy = Math.hypot(vx,vy);
-  const dy_img = centers[i2].y - centers[i0].y;
-  const theta = Math.atan2(-dy_img, vxy*40); // heuristic
-  const phi = Math.atan2(vy, vx);
-  const v0 = vxy / Math.cos(theta);
-  const carry_m = estimateCarry(v0, theta, 0.75);
-  return { v0, theta, phi, carry_m, n: centers.length };
-}
+function applyH(H, pt){ const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
+function fitKinematics(centers, H){ const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t])); const i0=0, i2=Math.min(2, ground.length-1); if (i2 <= i0) return null; const dt = ground[i2][2] - ground[i0][2] || 0.03333; const vx = (ground[i2][0]-ground[i0][0]) / dt; const vy = (ground[i2][1]-ground[i0][1]) / dt; const vxy = Math.hypot(vx,vy); const dy_img = centers[i2].y - centers[i0].y; const theta = Math.atan2(-dy_img, vxy*40); const phi = Math.atan2(vy, vx); const v0 = vxy / Math.cos(theta); const carry_m = estimateCarry(v0, theta, 0.75); return {{ v0, theta, phi, carry_m, n: centers.length }}; }
 
 /* ---- Analyze ---- */
 analyzeBtn.onclick = async () => {
@@ -442,13 +303,13 @@ analyzeBtn.onclick = async () => {
     const Hm = solveHomography(calibPts, dst);
     log('Homography solved from 4 points → meters');
 
-    const n = Math.max(6, Math.min(600, parseInt(numFramesEl.value||'240',10)));
+    const n = Math.max(6, Math.min(600, parseInt(numFramesEl.value||'150',10)));
     const method = methodSel.value;
     let frames;
-    if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback)) {
+    if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback && n <= 240)) { // rVFC safest for short bursts
       frames = await extractFramesRVFC(n);
     } else {
-      const dt = Math.max(1e-4, parseFloat(deltaTEl.value||'0.00417'));
+      const dt = Math.max(1e-4, parseFloat(deltaTEl.value||'0.03333'));
       frames = await extractFramesSeek(n, dt);
     }
     log(`Extracted ${frames.length} frames via ${method}`);
@@ -459,10 +320,7 @@ analyzeBtn.onclick = async () => {
     lastCenters = centers.slice();
     previewBtn.disabled = (centers.length === 0);
 
-    if (centers.length < 4) {
-      why.textContent = 'Could not track the ball — expand ROI, brighten light, or adjust frames/Δt.';
-      analyzeBtn.disabled = false; return;
-    }
+    if (centers.length < 4) { why.textContent = 'Could not track — expand ROI, brighten light, or adjust frames/Δt.'; analyzeBtn.disabled = false; return; }
     why.textContent = 'Fitting short-arc trajectory…';
     const kin = fitKinematics(centers, Hm);
     if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; return; }
@@ -488,7 +346,9 @@ previewBtn.onclick = async () => {
   for(const c of lastCenters){
     const f = lastFrames[c.idx] || lastFrames[lastFrames.length-1];
     ctx.putImageData(f.img, 0, 0);
-    drawFrameRectAndDot(roiRect, [c.x, c.y]);
+    drawFrame();
+    if (roiRect) { ctx.save(); ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h); ctx.restore(); }
+    ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(c.x, c.y, 8, 0, Math.PI*2); ctx.fill(); ctx.restore();
     await new Promise(r => setTimeout(r, 30));
   }
 };
@@ -497,9 +357,7 @@ previewBtn.onclick = async () => {
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeEnableAnalyze(); });
 
 // Service worker
-if ('serviceWorker' in navigator) {
-  try { navigator.serviceWorker.register('./sw.js'); } catch(e){}
-}
+if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('./sw.js'); } catch(e){} }
 </script>
 </body>
 </html>
