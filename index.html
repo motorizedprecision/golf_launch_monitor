@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Side-by-Side • Color Assist • Reacquire (v3)</title>
+<title>MP Launch Monitor — Side-by-Side • Color Assist • Reacquire (v3.1)</title>
 <style>
   :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
@@ -29,7 +29,7 @@
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Side-by-Side + Color Assist + Reacquire (v3)</h1>
+<h1>Motorized Precision • Launch Monitor — Side-by-Side + Color Assist + Reacquire (v3.1)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -206,10 +206,26 @@ let ballScaleMode=false; let ballScaleStart=null; let ballScalePx=null; let m_pe
 let ballInit=null; let setBallMode=false;
 let lastCenters=[]; let lastFrames=[]; let analysisStartMediaTime=0;
 let objectURL=null; let hasRVFC=false;
-let minAreaFrac=0.00001, maxAreaFrac=0.0025;
 let playingAnalyzed=false; let rAFHandle=0;
 
+/* ---------- Utils ---------- */
 function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
+function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+function boundedWindow(cx, cy, winW, winH, rect){
+  // Ensure a window (winW×winH) centered near (cx,cy) fully fits inside rect
+  winW = Math.max(2, Math.min(rect.width, winW|0));
+  winH = Math.max(2, Math.min(rect.height, winH|0));
+  const x = clamp((cx - (winW/2))|0, rect.x|0, (rect.x + rect.width - winW)|0);
+  const y = clamp((cy - (winH/2))|0, rect.y|0, (rect.y + rect.height - winH)|0);
+  return new cv.Rect(x|0, y|0, winW|0, winH|0);
+}
+function clampRect(rect, full){
+  const x = clamp(rect.x|0, full.x|0, (full.x+full.width)|0);
+  const y = clamp(rect.y|0, full.y|0, (full.y+full.height)|0);
+  const w = clamp((rect.width)|0, 0, (full.x+full.width - x)|0);
+  const h = clamp((rect.height)|0, 0, (full.y+full.height - y)|0);
+  return new cv.Rect(x,y,w,h);
+}
 
 /* ---------- Presets ---------- */
 colorPresetSel.onchange = ()=>{
@@ -218,7 +234,7 @@ colorPresetSel.onchange = ()=>{
   else if (p==='white'){ hLowEl.value=0; sLowEl.value=0; vLowEl.value=180; hHighEl.value=179; sHighEl.value=60; vHighEl.value=255; }
 };
 
-/* ---------- Helpers ---------- */
+/* ---------- Basic helpers ---------- */
 function waitForEvent(el, type, timeout=12000){
   return new Promise((resolve, reject)=>{
     const on = () => { cleanup(); resolve(); };
@@ -274,10 +290,7 @@ async function loadVideoFile(file){
     video.currentTime = Math.min(0.03, Math.max(0, (video.duration||0)*0.01));
     await waitForEvent(video,'seeked',15000);
     drawOverlayFrame();
-    const area = Math.max(1, (video.videoWidth||1920)*(video.videoHeight||1080));
-    const minA = Math.max(6, Math.floor(area*minAreaFrac));
-    const maxA = Math.max(minA+1, Math.floor(area*maxAreaFrac));
-    window.MP_DET = {minA, maxA};
+    window.MP_DET = {minA: Math.max(6, Math.floor((video.videoWidth*video.videoHeight)*0.00001)), maxA: Math.max(8, Math.floor((video.videoWidth*video.videoHeight)*0.0025))};
     hasRVFC = !!video.requestVideoFrameCallback;
     lastCenters=[]; lastFrames=[];
   } finally { maybeEnable(); }
@@ -368,29 +381,28 @@ async function extractFramesRVFC(n=200, showProgress=false){
   handle=requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
   await p; return frames;
 }
-function overlayProgress(text){ ctx.save(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(10,10,180,26); ctx.fillStyle='#ffffff'; ctx.font='14px system-ui, sans-serif'; ctx.fillText(text, 18, 28); ctx.restore(); }
+function overlayProgress(text){ ctx.save(); ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.fillRect(10,10,200,26); ctx.fillStyle='#ffffff'; ctx.font='14px system-ui, sans-serif'; ctx.fillText(text, 18, 28); ctx.restore(); }
 
 /* ---------- Predictor ---------- */
 class GHFilter { constructor(alpha=0.65,beta=0.85){ this.alpha=alpha; this.beta=beta; this.x=null; this.y=null; this.vx=0; this.vy=0; } predict(dt){ if(this.x===null) return [null,null]; return [this.x+this.vx*dt, this.y+this.vy*dt]; } correct(mx,my,dt){ if(this.x===null){ this.x=mx; this.y=my; this.vx=0; this.vy=0; return [this.x,this.y]; } const px=this.x+this.vx*dt, py=this.y+this.vy*dt; const rx=mx-px, ry=my-py; this.x=px+this.alpha*rx; this.y=py+this.alpha*ry; this.vx=this.vx+(this.beta/dt)*rx; this.vy=this.vy+(this.beta/dt)*ry; return [this.x,this.y]; }}
 
 /* ---------- Color mask ---------- */
-function colorMask(grayFull, hsvFull){
-  const use=colorAssistEl.checked;
-  if(!use) return null;
+function colorMaskHSV(hsvFull){
+  if(!colorAssistEl.checked) return null;
   const hL=+hLowEl.value|0, sL=+sLowEl.value|0, vL=+vLowEl.value|0;
   const hH=+hHighEl.value|0, sH=+sHighEl.value|0, vH=+vHighEl.value|0;
   const low = new cv.Mat(hsvFull.rows, hsvFull.cols, hsvFull.type(), [hL,sL,vL,0]);
   const high= new cv.Mat(hsvFull.rows, hsvFull.cols, hsvFull.type(), [hH,sH,vH,255]);
   let mask = new cv.Mat();
   cv.inRange(hsvFull, low, high, mask);
-  // Clean up small speckles
+  // morphology
   const kernel = cv.Mat.ones(3,3,cv.CV_8U);
   cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
   low.delete(); high.delete(); kernel.delete();
   return mask;
 }
 
-/* ---------- Detection with Color Assist + Reacquire ---------- */
+/* ---------- Detection (safe rects, proper deletes) ---------- */
 function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
   const minA = (window.MP_DET && window.MP_DET.minA) || 8;
@@ -414,149 +426,157 @@ function detectCenters(frames, roi){
   let lastTplScore = 0;
 
   for(let fi=0; fi<frames.length; fi++){
-    const f = frames[fi];
-    const dt = (fi>0)? Math.max(1e-4, f.t - frames[fi-1].t) : 1/30;
-    let src = cv.matFromImageData(f.img);
-    let grayFull = new cv.Mat(); cv.cvtColor(src,grayFull,cv.COLOR_RGBA2GRAY);
-    let hsvFull = new cv.Mat(); cv.cvtColor(src,hsvFull,cv.COLOR_RGBA2HSV);
-    const rect = new cv.Rect(Math.max(0,roi.x|0), Math.max(0,roi.y|0), Math.min(grayFull.cols - Math.max(0,roi.x|0), roi.w|0), Math.min(grayFull.rows - Math.max(0,roi.y|0), roi.h|0));
-    if (rect.width<=2 || rect.height<=2){ src.delete(); grayFull.delete(); hsvFull.delete(); break; }
-    let gray = grayFull.roi(rect);
-    let predicted = gh.predict(dt); if (predicted[0]===null) predicted = lastPos;
+    try{
+      const f = frames[fi];
+      const dt = (fi>0)? Math.max(1e-4, f.t - frames[fi-1].t) : 1/30;
+      let src = cv.matFromImageData(f.img);
+      let grayFull = new cv.Mat(); cv.cvtColor(src,grayFull,cv.COLOR_RGBA2GRAY);
+      let hsvFull = new cv.Mat(); cv.cvtColor(src,hsvFull,cv.COLOR_RGBA2HSV);
+      let rect = new cv.Rect(Math.max(0,roi.x|0), Math.max(0,roi.y|0), Math.max(1, Math.min(grayFull.cols - Math.max(0,roi.x|0), roi.w|0)), Math.max(1, Math.min(grayFull.rows - Math.max(0,roi.y|0), roi.h|0)));
+      rect = clampRect(rect, new cv.Rect(0,0,grayFull.cols,grayFull.rows));
+      if (rect.width<=2 || rect.height<=2){ src.delete(); grayFull.delete(); hsvFull.delete(); break; }
+      let gray = grayFull.roi(rect);
 
-    // TEMPLATE
-    let tplBest=null, tplScore=-1;
-    if (useTpl){
-      const cx = lastPos[0], cy = lastPos[1];
-      const sx = Math.max(rect.x, (cx - r)|0), sy = Math.max(rect.y, (cy - r)|0);
-      const ex = Math.min(rect.x+rect.width,  cx + r), ey = Math.min(rect.y+rect.height, cy + r);
-      const sw = Math.max((ballInit.tpl.cols||25)+1, ex - sx), sh = Math.max((ballInit.tpl.rows||25)+1, ey - sy);
-      const srect = new cv.Rect(sx, sy, sw, sh);
-      let search = grayFull.roi(srect);
-      let res = new cv.Mat();
-      cv.matchTemplate(search, ballInit.tpl, res, cv.TM_CCOEFF_NORMED);
-      const mm = cv.minMaxLoc(res);
-      const topLeft = { x: srect.x + mm.maxLoc.x, y: srect.y + mm.maxLoc.y };
-      tplScore = mm.maxVal;
-      tplBest = { x: topLeft.x + (ballInit.tpl.cols/2), y: topLeft.y + (ballInit.tpl.rows/2), score: tplScore };
-      res.delete(); search.delete();
-    }
+      let predicted = gh.predict(dt); if (predicted[0]===null) predicted = lastPos;
 
-    // MOTION
-    let motBest=null;
-    let work = new cv.Mat();
-    if(prevGray){ cv.absdiff(gray,prevGray,work); } else { work = gray.clone(); }
-    cv.GaussianBlur(work,work,new cv.Size(3,3),0);
-    cv.threshold(work,work,0,255,cv.THRESH_BINARY|cv.THRESH_OTSU);
-    const kernel = cv.Mat.ones(3,3,cv.CV_8U); cv.morphologyEx(work,work,cv.MORPH_OPEN,kernel);
-    const contours = new cv.MatVector(), hier = new cv.Mat();
-    cv.findContours(work,contours,hier,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-    let bestScore=-1;
-    for(let i=0;i<contours.size();i++){
-      const c = contours.get(i); const area = cv.contourArea(c);
-      if(area<Math.max(minA,areaMin) || area>Math.min(maxA,areaMax)){ c.delete(); continue; }
-      const m = cv.moments(c,true);
-      let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
-      cx += rect.x; cy += rect.y;
-      const rectB = cv.boundingRect(c);
-      const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
-      const d = Math.hypot(cx - predicted[0], cy - predicted[1]);
-      const score = circ + Math.min(1, area/250.0) + (d>0 ? (1/(1+d/50)) : 1.5);
-      if(score>bestScore){ bestScore=score; motBest={x:cx,y:cy}; }
-      c.delete();
-    }
-    work.delete(); kernel.delete(); contours.delete(); hier.delete();
+      // TEMPLATE — safe search window (fully inside rect, min >= tpl size)
+      let tplBest=null, tplScore=-1;
+      if (useTpl){
+        const desiredW = Math.max((ballInit.tpl.cols|0)+1, Math.min(rect.width, (2*r)|0));
+        const desiredH = Math.max((ballInit.tpl.rows|0)+1, Math.min(rect.height, (2*r)|0));
+        const srect = boundedWindow(lastPos[0]|0, lastPos[1]|0, desiredW, desiredH, rect);
+        let search = grayFull.roi(srect);
+        let res = new cv.Mat();
+        cv.matchTemplate(search, ballInit.tpl, res, cv.TM_CCOEFF_NORMED);
+        const mm = cv.minMaxLoc(res);
+        const topLeft = { x: srect.x + mm.maxLoc.x, y: srect.y + mm.maxLoc.y };
+        tplScore = mm.maxVal;
+        tplBest = { x: topLeft.x + (ballInit.tpl.cols/2), y: topLeft.y + (ballInit.tpl.rows/2), score: tplScore };
+        res.delete(); search.delete();
+      }
 
-    // COLOR assist (full ROI or large window on lost/reacq)
-    let colBest=null;
-    if (colorAssistEl.checked){
-      const mask = colorMask(grayFull, hsvFull);
-      if (mask){
-        const srect = (lostCount>0 && doReacq) ? new cv.Rect(Math.max(rect.x, (predicted[0]-reacqR)|0), Math.max(rect.y, (predicted[1]-reacqR)|0), Math.min(rect.width, (reacqR*2)), Math.min(rect.height, (reacqR*2))) : rect;
-        let mROI = mask.roi(srect);
-        const cnts = new cv.MatVector(), hr = new cv.Mat();
-        cv.findContours(mROI, cnts, hr, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-        let best=-1;
-        for(let i=0;i<cnts.size();i++){
-          const c = cnts.get(i); const area = cv.contourArea(c);
-          if(area<Math.max(minA, areaMin*0.5) || area>Math.min(maxA, areaMax*2.2)){ c.delete(); continue; }
-          const m = cv.moments(c,true);
-          let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
-          cx += srect.x; cy += srect.y;
-          const rectB = cv.boundingRect(c);
-          const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
-          const d = Math.hypot(cx - predicted[0], cy - predicted[1]);
-          const sc = 1.0 + 0.8*circ + Math.min(1, area/(expArea||200)) + (d>0 ? (1/(1+d/40)) : 1.5);
-          if(sc>best){ best=sc; colBest={x:cx,y:cy}; }
-          c.delete();
+      // MOTION
+      let motBest=null;
+      let work = new cv.Mat();
+      if(prevGray){ cv.absdiff(gray,prevGray,work); } else { work = gray.clone(); }
+      cv.GaussianBlur(work,work,new cv.Size(3,3),0);
+      cv.threshold(work,work,0,255,cv.THRESH_BINARY|cv.THRESH_OTSU);
+      const kernel = cv.Mat.ones(3,3,cv.CV_8U); cv.morphologyEx(work,work,cv.MORPH_OPEN,kernel);
+      const contours = new cv.MatVector(), hier = new cv.Mat();
+      cv.findContours(work,contours,hier,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+      let bestScore=-1;
+      for(let i=0;i<contours.size();i++){
+        const c = contours.get(i); const area = cv.contourArea(c);
+        if(area<Math.max(minA,areaMin) || area>Math.min(maxA,areaMax)){ c.delete(); continue; }
+        const m = cv.moments(c,true);
+        let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
+        cx += rect.x; cy += rect.y;
+        const rectB = cv.boundingRect(c);
+        const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
+        const d = Math.hypot(cx - predicted[0], cy - predicted[1]);
+        const score = circ + Math.min(1, area/250.0) + (d>0 ? (1/(1+d/50)) : 1.5);
+        if(score>bestScore){ bestScore=score; motBest={x:cx,y:cy}; }
+        c.delete();
+      }
+      work.delete(); kernel.delete(); contours.delete(); hier.delete();
+
+      // COLOR assist
+      let colBest=null, mask=null, mROI=null;
+      if (colorAssistEl.checked){
+        mask = colorMaskHSV(hsvFull);
+        if (mask){
+          const desiredW = Math.max(6, Math.min(rect.width, (doReacq && lastPos ? reacqR*2 : rect.width)|0));
+          const desiredH = Math.max(6, Math.min(rect.height, (doReacq && lastPos ? reacqR*2 : rect.height)|0));
+          const srect = (doReacq && lastPos) ? boundedWindow((predicted[0]|0),(predicted[1]|0), desiredW, desiredH, rect) : rect;
+          mROI = mask.roi(srect);
+          const cnts = new cv.MatVector(), hr = new cv.Mat();
+          cv.findContours(mROI, cnts, hr, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+          let best=-1;
+          for(let i=0;i<cnts.size();i++){
+            const c = cnts.get(i); const area = cv.contourArea(c);
+            if(area<Math.max(minA, areaMin*0.5) || area>Math.min(maxA, areaMax*2.2)){ c.delete(); continue; }
+            const m = cv.moments(c,true);
+            let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
+            cx += srect.x; cy += srect.y;
+            const rectB = cv.boundingRect(c);
+            const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
+            const d = Math.hypot(cx - predicted[0], cy - predicted[1]);
+            const sc = 1.0 + 0.8*circ + Math.min(1, area/((Math.PI*(expDia/2)*(expDia/2))||200)) + (d>0 ? (1/(1+d/40)) : 1.5);
+            if(sc>best){ best=sc; colBest={x:cx,y:cy}; }
+            c.delete();
+          }
+          cnts.delete(); hr.delete();
         }
-        cnts.delete(); hr.delete(); mask.delete(); mROI.delete();
       }
-    }
 
-    // Impact guard: detect drop in tplScore or sudden motion → freeze template updates for N frames
-    if (fi>1 && useTpl){
-      const drop = (lastTplScore - tplScore);
-      if (drop>0.25) freezeLeft = Math.max(freezeLeft, freezeN);
-    }
-    lastTplScore = tplScore;
-
-    // Fuse: template > color > motion > prediction with gating
-    let chosen = null;
-    const dTpl = tplBest ? Math.hypot(tplBest.x - predicted[0], tplBest.y - predicted[1]) : 1e9;
-    const dCol = colBest ? Math.hypot(colBest.x - predicted[0], colBest.y - predicted[1]) : 1e9;
-    const dMot = motBest ? Math.hypot(motBest.x - predicted[0], motBest.y - predicted[1]) : 1e9;
-
-    if (tplBest && tplBest.score >= mthr && dTpl <= gatePx) chosen = {x:tplBest.x, y:tplBest.y, src:'tpl'};
-    else if (colBest && dCol <= gatePx*1.6) chosen = {x:colBest.x, y:colBest.y, src:'col'};
-    else if (motBest && dMot <= gatePx*1.8) chosen = {x:motBest.x, y:motBest.y, src:'mot'};
-    else if (doReacq && colBest) chosen = {x:colBest.x, y:colBest.y, src:'colR'};
-    else chosen = {x:predicted[0], y:predicted[1], src:'pred'};
-
-    // Correct
-    const corr = new GHFilter(0.65,0.85);
-    corr.x = gh.x; corr.y = gh.y; corr.vx=gh.vx; corr.vy=gh.vy; // shallow copy
-    const xy = corr.correct(chosen.x, chosen.y, dt);
-    gh.x = corr.x; gh.y = corr.y; gh.vx=corr.vx; gh.vy=corr.vy;
-    const x = xy[0], y = xy[1];
-    lastPos=[x,y];
-
-    // Auto-update template AFTER impact freeze
-    if (useTpl && tplAutoEl.checked){
-      if (freezeLeft>0){ freezeLeft--; } else if (fi % 5 === 0){
-        const size = ballInit.w; const half=(size-1)/2;
-        const cx = Math.max(half, Math.min(overlay.width-half-1, x|0));
-        const cy = Math.max(half, Math.min(overlay.height-half-1, y|0));
-        const roiU = new cv.Rect(cx-half, cy-half, size, size);
-        let patch = grayFull.roi(roiU).clone();
-        ballInit.tpl.delete();
-        ballInit = {x: cx, y: cy, tpl: patch, w: size, h: size};
+      // Impact guard on template updates
+      if (fi>1 && useTpl){
+        const drop = (lastTplScore - tplScore);
+        if (drop>0.25) freezeLeft = Math.max(freezeLeft, freezeN);
       }
+      lastTplScore = tplScore;
+
+      // Fuse
+      let chosen = null;
+      const dTpl = tplBest ? Math.hypot(tplBest.x - predicted[0], tplBest.y - predicted[1]) : 1e9;
+      const dCol = colBest ? Math.hypot(colBest.x - predicted[0], colBest.y - predicted[1]) : 1e9;
+      const dMot = motBest ? Math.hypot(motBest.x - predicted[0], motBest.y - predicted[1]) : 1e9;
+
+      if (tplBest && tplBest.score >= mthr && dTpl <= gatePx) chosen = {x:tplBest.x, y:tplBest.y, src:'tpl'};
+      else if (colBest && dCol <= gatePx*1.6) chosen = {x:colBest.x, y:colBest.y, src:'col'};
+      else if (motBest && dMot <= gatePx*1.8) chosen = {x:motBest.x, y:motBest.y, src:'mot'};
+      else if (doReacq && colBest) chosen = {x:colBest.x, y:colBest.y, src:'colR'};
+      else chosen = {x:predicted[0], y:predicted[1], src:'pred'};
+
+      // Correct
+      const xy = gh.correct(chosen.x, chosen.y, dt);
+      const x = xy[0], y = xy[1];
+      lastPos=[x,y];
+
+      // Auto-update template AFTER impact freeze
+      if (useTpl && tplAutoEl.checked){
+        if (freezeLeft>0){ freezeLeft--; } else if (fi % 5 === 0){
+          const size = ballInit.w; const half=(size-1)/2;
+          const cx = Math.max(half, Math.min(overlay.width-half-1, x|0));
+          const cy = Math.max(half, Math.min(overlay.height-half-1, y|0));
+          const roiU = new cv.Rect(cx-half, cy-half, size, size);
+          let patch = grayFull.roi(roiU).clone();
+          ballInit.tpl.delete();
+          ballInit = {x: cx, y: cy, tpl: patch, w: size, h: size};
+        }
+      }
+
+      centers.push({x,y,t:f.t, idx:f.idx});
+
+      // live progress overlay while analyzing
+      if (showDuringEl.checked && (fi % 3 === 0)){
+        ctx.putImageData(f.img,0,0); drawOverlayFrame();
+        const sub = centers.slice(Math.max(0, centers.length-120));
+        drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
+        ctx.save(); ctx.fillStyle='#4cd964'; ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.fill(); ctx.restore();
+      }
+
+      // cleanup
+      if (mROI){ mROI.delete(); }
+      if (mask){ mask.delete(); }
+      if (prevGray) prevGray.delete();
+      prevGray = gray.clone();
+      gray.delete(); src.delete(); grayFull.delete(); hsvFull.delete();
+
+      if (chosen.src==='pred') lostCount++; else lostCount = 0;
+
+      const tplTxt = (useTpl?`tpl=${(tplScore||0).toFixed(2)}`:'tpl=–');
+      log(`Detecting ball: ${f.idx+1}/${frames.length} (${tplTxt}, src=${chosen.src})`);
+    }catch(e){
+      log('Frame '+fi+' error: '+(e && e.message ? e.message : String(e)));
+      // continue to next frame
     }
-
-    centers.push({x,y,t:f.t, idx:f.idx});
-    if (showDuringEl.checked && (fi % 3 === 0)){
-      ctx.putImageData(f.img,0,0); drawOverlayFrame();
-      const sub = centers.slice(Math.max(0, centers.length-120));
-      drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
-      ctx.save(); ctx.fillStyle='#4cd964'; ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2); ctx.fill(); ctx.restore();
-    }
-
-    if (prevGray) prevGray.delete();
-    prevGray = gray.clone();
-    gray.delete(); src.delete(); grayFull.delete(); hsvFull.delete();
-
-    if (chosen.src==='pred') lostCount++; else lostCount = 0;
-    if (lostCount>5 && doReacq){ /* next loop uses wider color window via colR */ }
-
-    const tplTxt = (useTpl?`tpl=${tplScore.toFixed(2)}`:'tpl=–');
-    log(`Detecting ball: ${f.idx+1}/${frames.length} (${tplTxt}, src=${chosen.src})`);
   }
   if (prevGray) prevGray.delete();
   return centers;
 }
 
-/* ---------- Kinematics (ball scale / none) ---------- */
+/* ---------- Kinematics ---------- */
 function fitKinematicsBallScale(centers, m_per_px){
   if (!centers || centers.length<3 || !m_per_px) return null;
   const i0 = 0, i2 = Math.min(2, centers.length-1);
@@ -587,7 +607,7 @@ analyzeBtn.onclick = async ()=>{
     if (scaleModeSel.value==='ball' && !m_per_px){ why.textContent='Set ball scale (drag diameter) or switch scale to None.'; analyzeBtn.disabled=false; return; }
 
     const centers = detectCenters(frames, roiRect);
-    lastCenters = centers.slice();
+    lastCenters = centers.filter(Boolean);
     if (centers.length<4){ why.textContent='Could not track — tune ROI/Template/Color Assist.'; analyzeBtn.disabled=false; return; }
 
     const kin = fitKinematicsBallScale(centers, scaleModeSel.value==='none'?1.0:m_per_px);
