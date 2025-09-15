@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Side-by-Side • Analyzed Playback • Ball Scale</title>
+<title>MP Launch Monitor — Side-by-Side • Analyzed Playback • Ball Scale (v2)</title>
 <style>
   :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
@@ -28,7 +28,7 @@
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Side-by-Side + Analyzed Playback</h1>
+<h1>Motorized Precision • Launch Monitor — Side-by-Side + Analyzed Playback (v2)</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
@@ -47,6 +47,8 @@
     </select>
   </label>
   <span id="scaleBadge" class="badge">Scale: Ball (click-drag across ball)</span>
+  <label><input type="checkbox" id="autoPlay" checked> Auto‑play after analyze</label>
+  <label><input type="checkbox" id="showDuringAnalysis"> Show progress overlay during analysis</label>
 </div>
 
 <div class="row" id="trayRow">
@@ -140,6 +142,8 @@ const analyzeBtn = document.getElementById('analyzeBtn');
 const playAnalyzedBtn = document.getElementById('playAnalyzedBtn');
 const pauseBtn = document.getElementById('pauseBtn');
 const stopBtn = document.getElementById('stopBtn');
+const autoPlayEl = document.getElementById('autoPlay');
+const showDuringEl = document.getElementById('showDuringAnalysis');
 const tplSizeEl = document.getElementById('tplSize');
 const searchRadEl = document.getElementById('searchRad');
 const matchThrEl = document.getElementById('matchThr');
@@ -170,8 +174,6 @@ let lastCenters = [];
 let lastFrames = [];
 let analysisStartMediaTime = 0;
 let objectURL = null;
-let trailPoints = [];
-let predictedPath = [];
 let m_per_px = null; // when using ball or none
 let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 1080x1920
 let playingAnalyzed = false;
@@ -198,7 +200,7 @@ function resetApp(){
     calibPts = []; roiRect = null; roiMode = false; roiStart = null;
     ballScaleMode=false; ballScaleStart=null; ballScalePx=null; m_per_px=null;
     if (ballInit && ballInit.tpl) ballInit.tpl.delete(); ballInit=null; setBallMode=false;
-    lastCenters=[]; lastFrames=[]; trailPoints=[]; predictedPath=[];
+    lastCenters=[]; lastFrames=[];
     ctx.clearRect(0,0,overlay.width,overlay.height);
     log('App reset');
   } catch(e){ log('Reset error: '+e.message); }
@@ -272,7 +274,7 @@ async function loadVideoFile(file){
     log(`Detection area bounds: min≈${minA}, max≈${maxA}`);
     window.MP_DET = {minA, maxA};
     hasRVFC = !!video.requestVideoFrameCallback;
-    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[]; trailPoints=[]; predictedPath=[];
+    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[];
   } finally { maybeEnable(); }
 }
 
@@ -336,7 +338,7 @@ overlay.addEventListener('pointerup', (e) => {
     ballScalePx = Math.max(5, d);
     m_per_px = 0.04267 / ballScalePx; // 42.67 mm
     ballScaleMode = false; ballScaleStart = null;
-    log(`Ball scale set: ${ballScalePx.toFixed(2)} px → ${m_per_px.toExponential(3)} m/px`);
+    log(`Ball scale set: ${ballScalePx.toFixed(2)} px → ${(m_per_px).toExponential(3)} m/px`);
     drawOverlayFrame();
     maybeEnable();
     return;
@@ -376,8 +378,6 @@ function drawOverlayFrame(tempRect){
     const half = (ballInit.w-1)/2;
     ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(ballInit.x-half, ballInit.y-half, ballInit.w, ballInit.h);
   }
-  // Trail (persisted)
-  if (trailPoints.length>1) drawTrail(trailPoints, 3);
   ctx.restore();
 }
 
@@ -399,19 +399,32 @@ function canvasXY(e){ const r = overlay.getBoundingClientRect(); const x = (e.cl
 function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
 
 /* ---------- Extraction ---------- */
-async function extractFramesSeek(n=180, dt=0.03333){
+async function extractFramesSeek(n=180, dt=0.03333, showProgress=false){
   const frames=[]; let t=video.currentTime; const dur = video.duration || 1e9;
   analysisStartMediaTime = t;
-  for(let i=0;i<n;i++){ if (t > dur) break; video.currentTime = t; await new Promise(res=>{ video.onseeked = res; }); drawOverlayFrame(); frames.push({img: ctx.getImageData(0,0,overlay.width,overlay.height), t, idx:i}); why.textContent = `Sampling (seek): ${i+1}/${n}`; await new Promise(requestAnimationFrame); t += dt; }
+  for(let i=0;i<n;i++){
+    if (t > dur) break;
+    video.currentTime = t;
+    await new Promise(res=>{ video.onseeked = res; });
+    drawOverlayFrame();
+    const img = ctx.getImageData(0,0,overlay.width,overlay.height);
+    frames.push({img, t, idx:i});
+    if (showProgress) { ctx.save(); ctx.fillStyle='#ffffff'; ctx.fillText(`Sampling ${i+1}/${n}`, 12, 22); ctx.restore(); }
+    why.textContent = `Sampling (seek): ${i+1}/${n}`;
+    await new Promise(requestAnimationFrame);
+    t += dt;
+  }
   return frames;
 }
-async function extractFramesRVFC(n=180){
+async function extractFramesRVFC(n=180, showProgress=false){
   const frames=[]; let count=0; let handle=0;
   analysisStartMediaTime = video.currentTime;
   const onframe = (now, meta) => {
     try{
       drawOverlayFrame();
-      frames.push({img: ctx.getImageData(0,0,overlay.width,overlay.height), t: meta.mediaTime, idx: count});
+      const img = ctx.getImageData(0,0,overlay.width,overlay.height);
+      frames.push({img, t: meta.mediaTime, idx: count});
+      if (showProgress) { ctx.save(); ctx.fillStyle='#ffffff'; ctx.fillText(`Sampling ${count+1}/${n}`, 12, 22); ctx.restore(); }
       why.textContent = `Sampling (rVFC): ${count+1}/${n}`;
       count++;
       if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; }
@@ -434,7 +447,6 @@ class GHFilter {
 /* ---------- Detection ---------- */
 function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
-  trailPoints = [];
   const minA = (window.MP_DET && window.MP_DET.minA) || 8;
   const maxA = (window.MP_DET && window.MP_DET.maxA) || 600;
   const useTpl = !!(ballInit && ballInit.tpl);
@@ -513,19 +525,16 @@ function detectCenters(frames, roi){
     const x = corr[0], y = corr[1];
     lastPos = [x,y];
 
-    // Auto-update template
-    if (useTpl && tplAuto && (fi % 5 === 0)) {
-      const size = ballInit.w;
-      const half = (size-1)/2;
-      const cx = Math.max(half, Math.min(overlay.width-half-1, x|0));
-      const cy = Math.max(half, Math.min(overlay.height-half-1, y|0));
-      const roiU = new cv.Rect(cx-half, cy-half, size, size);
-      let patch = grayFull.roi(roiU).clone();
-      ballInit.tpl.delete(); ballInit = {x: cx, y: cy, tpl: patch, w: size, h: size};
-    }
-
     centers.push({x,y,t:f.t, idx:f.idx});
-    trailPoints.push({x,y});
+
+    if (showDuringEl.checked && (fi % 4 === 0)){
+      // live progress overlay while analyzing
+      ctx.putImageData(f.img, 0, 0);
+      drawOverlayFrame();
+      const sub = centers.slice(-80);
+      drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
+      ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
+    }
 
     if (prevGray) prevGray.delete();
     prevGray = gray.clone();
@@ -537,24 +546,7 @@ function detectCenters(frames, roi){
 }
 
 /* ---------- Kinematics ---------- */
-function fitKinematicsTray(centers, H){
-  // ground-plane via homography
-  function applyH(H, pt){ const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
-  const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t]));
-  const i0=0, i2=Math.min(2, ground.length-1); if (i2<=i0) return null;
-  const dt = ground[i2][2] - ground[i0][2] || 0.03333;
-  const vx = (ground[i2][0]-ground[i0][0]) / dt;
-  const vy = (ground[i2][1]-ground[i0][1]) / dt;
-  const vxy = Math.hypot(vx,vy);
-  const dy_img = centers[i2].y - centers[i0].y;
-  const theta = Math.atan2(-dy_img, vxy*40); // heuristic
-  const phi = Math.atan2(vy, vx);
-  const v0 = vxy / Math.cos(theta);
-  const carry_m = (v0*v0/9.80665)*Math.sin(2*theta)*0.75;
-  return { v0, theta, phi, carry_m, n: centers.length };
-}
 function fitKinematicsBallScale(centers, m_per_px){
-  // 2D image-plane approximation using pixel-to-meter scale from ball diameter
   if (!centers || centers.length<3 || !m_per_px) return null;
   const i0 = 0, i2 = Math.min(2, centers.length-1);
   const dt = Math.max(1e-4, centers[i2].t - centers[i0].t);
@@ -562,13 +554,11 @@ function fitKinematicsBallScale(centers, m_per_px){
   const dy_px = centers[i2].y - centers[i0].y;
   const v_pix = Math.hypot(dx_px, dy_px) / dt; // px/s
   const v0 = v_pix * m_per_px; // m/s (approx)
-  const theta = Math.atan2(-dy_px, Math.abs(dx_px)+1e-6); // image-plane up is negative y
-  const phi = Math.atan2(0, 1); // unknown without homography; set 0
-  const carry_m = (v0*v0/9.80665)*Math.sin(2*theta)*0.65; // more conservative drag
+  const theta = Math.atan2(-dy_px, Math.abs(dx_px)+1e-6);
+  const phi = 0;
+  const carry_m = (v0*v0/9.80665)*Math.sin(2*theta)*0.65;
   return { v0, theta, phi, carry_m, n: centers.length };
 }
-
-/* ---------- Homography ---------- */
 function solveHomography(src4, dst4) {
   const src = cv.matFromArray(4,1,cv.CV_32FC2, src4.flat());
   const dst = cv.matFromArray(4,1,cv.CV_32FC2, dst4.flat());
@@ -583,15 +573,14 @@ analyzeBtn.onclick = async () => {
   try {
     analyzeBtn.disabled = true; playAnalyzedBtn.disabled = true;
     why.textContent = 'Analyzing…';
-    // Extract frames
     const n = Math.max(6, Math.min(900, parseInt(numFramesEl.value||'180',10)));
     const method = methodSel.value;
     let frames;
     if (method === 'rvfc' || (method === 'auto' && !!video.requestVideoFrameCallback && n <= 240)) {
-      frames = await extractFramesRVFC(n);
+      frames = await extractFramesRVFC(n, showDuringEl.checked);
     } else {
       const dt = Math.max(1e-4, parseFloat(deltaTEl.value||'0.03333'));
-      frames = await extractFramesSeek(n, dt);
+      frames = await extractFramesSeek(n, dt, showDuringEl.checked);
     }
     log(`Extracted ${frames.length} frames via ${method}`);
     lastFrames = frames;
@@ -599,36 +588,36 @@ analyzeBtn.onclick = async () => {
     if (!roiRect) { why.textContent = 'Set ROI first.'; analyzeBtn.disabled = false; return; }
     if (!(ballInit && ballInit.tpl)) { why.textContent = 'Set Ball Init first.'; analyzeBtn.disabled = false; return; }
 
-    // Detect
     const centers = detectCenters(frames, roiRect);
     lastCenters = centers.slice();
     if (centers.length < 4) { why.textContent = 'Could not track — adjust Ball Init/ROI/thresholds.'; analyzeBtn.disabled=false; return; }
 
-    // Scale & Kinematics
+    // Basic kinematics (ball-scale or none). Tray mode omitted in v2 for simplicity.
     let kin=null;
-    if (scaleModeSel.value === 'tray') {
-      if (calibPts.length !== 4) { why.textContent = 'Need 4 tray points for tray scale.'; analyzeBtn.disabled=false; return; }
-      const [W,Hm] = [0.34, 0.25]; // tray size in meters (34×25 cm)
-      const dst = [[0,0],[0,Hm],[W,Hm],[W,0]];
-      const H = solveHomography(calibPts, dst);
-      kin = fitKinematicsTray(centers, H);
-      H.delete();
-    } else if (scaleModeSel.value === 'ball') {
-      if (!ballScalePx) { why.textContent = 'Set ball scale (drag diameter) or switch to tray scale.'; analyzeBtn.disabled=false; return; }
+    if (scaleModeSel.value === 'ball') {
+      if (!m_per_px) { why.textContent = 'Set ball scale (drag diameter) or switch scale to None.'; analyzeBtn.disabled=false; return; }
       kin = fitKinematicsBallScale(centers, m_per_px);
+    } else if (scaleModeSel.value === 'none') {
+      kin = fitKinematicsBallScale(centers, 1.0); // px-units
     } else {
-      kin = fitKinematicsBallScale(centers, 1.0); // pixels-as-meters (for visualization only)
+      why.textContent = 'Tray mode not active in v2; switch to Ball or None.';
+      analyzeBtn.disabled=false; return;
     }
 
     if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; return; }
 
-    out.speed.textContent   = `${kin.v0.toFixed(1)} ${scaleModeSel.value==='none'?'px/s':'m/s'} (${scaleModeSel.value==='none'?'—':( (kin.v0*2.237).toFixed(1)+' mph')})`;
+    out.speed.textContent   = `${kin.v0.toFixed(1)} ${scaleModeSel.value==='none'?'px/s':'m/s'}${scaleModeSel.value==='none'?'':' ('+(kin.v0*2.237).toFixed(1)+' mph)'}`;
     out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
     out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
     out.carry.textContent   = `${(kin.carry_m.toFixed(1))} ${scaleModeSel.value==='none'?'px':'m'}`;
     out.nframes.textContent = `${(kin.n)}`;
-    why.textContent = 'Done ✅ — ready to Play analyzed';
+    why.textContent = 'Done ✅ — overlay ready';
+
+    // Draw initial overlay snapshot (so you see trail immediately)
+    overlayAtTime(analysisStartMediaTime + 1e-4);
+
     playAnalyzedBtn.disabled = false; pauseBtn.disabled = false; stopBtn.disabled = false;
+    if (autoPlayEl.checked) playAnalyzedBtn.click();
   } catch (err) {
     console.error(err);
     log('Error: ' + (err && err.message ? err.message : String(err)));
@@ -640,18 +629,19 @@ analyzeBtn.onclick = async () => {
 
 /* ---------- Analyzed playback (video + overlay together) ---------- */
 function overlayAtTime(now){
-  // Draw current video frame to overlay, then ROI, then trail up to 'now', and current dot near that time
   drawOverlayFrame();
   if (!lastCenters.length) return;
-  // Find index up to 'now'
+  const eps = 0.002;
+  const firstT = lastCenters[0].t;
+  const lastT = lastCenters[lastCenters.length-1].t;
+  const clamped = Math.min(Math.max(now, firstT), lastT+eps);
   let i = 0;
-  while (i < lastCenters.length && lastCenters[i].t <= now) i++;
+  // binary search would be faster; linear scan is fine at <2k points
+  while (i < lastCenters.length && lastCenters[i].t <= clamped) i++;
   const sub = lastCenters.slice(0, Math.max(1,i));
-  if (sub.length) {
-    drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
-    const curr = sub[sub.length-1];
-    ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(curr.x, curr.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
-  }
+  drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
+  const curr = sub[sub.length-1];
+  ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(curr.x, curr.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
 }
 
 function rafLoop(){
@@ -670,7 +660,7 @@ function rafLoop(){
 playAnalyzedBtn.onclick = async () => {
   if (!lastCenters.length) return;
   playingAnalyzed = true;
-  video.currentTime = analysisStartMediaTime;
+  video.currentTime = analysisStartMediaTime + 1e-4;
   try { await video.play(); } catch(_){}
   cancelAnimationFrame(rAFHandle);
   rAFHandle = requestAnimationFrame(rafLoop);
@@ -679,12 +669,14 @@ playAnalyzedBtn.onclick = async () => {
 pauseBtn.onclick = () => {
   playingAnalyzed = false; try { video.pause(); } catch(_){}
   cancelAnimationFrame(rAFHandle);
+  // Keep overlay frozen at current frame
+  overlayAtTime(video.currentTime);
 };
 stopBtn.onclick = () => {
   playingAnalyzed = false; try { video.pause(); } catch(_){}
   cancelAnimationFrame(rAFHandle);
-  try { video.currentTime = analysisStartMediaTime; } catch(_){}
-  drawOverlayFrame();
+  try { video.currentTime = analysisStartMediaTime + 1e-4; } catch(_){}
+  overlayAtTime(analysisStartMediaTime + 1e-4);
 };
 
 /* ---------- Status ---------- */
@@ -694,9 +686,9 @@ function maybeEnable(){
   const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
   const okBall = !!(ballInit && ballInit.tpl);
   const mode = scaleModeSel.value;
-  const scaleOK = (mode==='tray' ? (calibPts.length===4) : (mode==='ball' ? !!ballScalePx : true));
+  const scaleOK = (mode==='tray' ? (calibPts.length===4) : (mode==='ball' ? true : true));
   const rvfc = !!video.requestVideoFrameCallback;
-  why.textContent = `Status: OpenCV ${okCV?'✅':'❌'} • Video ${okVid?'✅':'❌'} • ROI ${okROI?'✅':'❌'} • BallInit ${okBall?'✅':'❌'} • Scale ${scaleOK?'✅':'⚠️'} • rVFC ${rvfc?'✅':'❌'}`;
+  why.textContent = `Status: OpenCV ${okCV?'✅':'❌'} • Video ${okVid?'✅':'❌'} • ROI ${okROI?'✅':'❌'} • BallInit ${okBall?'✅':'❌'} • Scale ${mode} • rVFC ${rvfc?'✅':'❌'}`;
   analyzeBtn.disabled = !(okCV && okVid && okROI && okBall);
   playAnalyzedBtn.disabled = lastCenters.length === 0;
   pauseBtn.disabled = !playingAnalyzed;
