@@ -3,46 +3,72 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>MP Launch Monitor — Template Tracker + Trail (No-Kalman Fallback)</title>
+<title>MP Launch Monitor — Side-by-Side • Analyzed Playback • Ball Scale</title>
 <style>
   :root { --bg:#0f1115; --ink:#eaeef5; --muted:#9aa4b2; --brand:#ff725c; --line:#23262d; --ok:#4cd964; --accent:#4cd964; --danger:#ff5e57; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto; background: var(--bg); color: var(--ink); margin: 0; padding: 16px; }
   h1 { color: var(--brand); font-size: 20px; margin: 0 0 12px 0; }
   .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
-  button,input,select { font-size: 16px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background:#12141a; color:var(--ink); }
+  button,input,select { font-size: 15px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background:#12141a; color:var(--ink); }
   button.primary { background: linear-gradient(180deg,#ff725c,#e2443a); border:0; color:#fff; }
   button[disabled]{ opacity:.5; }
-  #video, #canvas { width: 100%; max-width: 560px; background: #000; border: 1px solid var(--line); border-radius: 12px; display:block; }
-  #canvas { margin-top: 8px; }
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items:start; }
+  .pane { background:#0b0d12; border:1px solid #23262d; border-radius: 12px; padding: 10px; }
+  .pane h3 { margin: 0 0 8px 0; font-size: 14px; color:#cbd5e1; }
+  video, canvas { width: 100%; height: auto; display:block; background:#000; border-radius:10px; }
   .stat { background:#12141a; border:1px solid var(--line); border-radius:10px; padding:8px 12px; min-width:160px; }
-  .stats { display:flex; gap:8px; flex-wrap:wrap; margin-top: 10px; }
+  .stats { display:flex; gap:8px; flex-wrap:wrap; margin-top: 8px; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .status { color: var(--muted); font-size: 14px; }
-  #log { white-space: pre-wrap; font-size: 12px; color: #cbd5e1; background: #0b0d12; border:1px solid var(--line); border-radius:10px; padding:10px; max-width: 560px; }
-  label { display:flex; align-items:center; gap:8px; }
+  #log { white-space: pre-wrap; font-size: 12px; color: #cbd5e1; background: #0b0d12; border:1px solid var(--line); border-radius:10px; padding:10px; }
+  label { display:flex; align-items:center; gap:6px; }
   .badge { border:1px solid var(--line); border-radius: 999px; padding: 4px 8px; font-size: 12px; color: var(--muted); }
   .drop { border:2px dashed #3a3f4a; border-radius:12px; padding:10px; color:#9aa4b2; }
   .drop.drag { border-color:#4cd964; color:#eaeef5; }
 </style>
 </head>
 <body>
-<h1>Motorized Precision • Launch Monitor — Template Tracker + Trail (Kalman‑less)</h1>
+<h1>Motorized Precision • Launch Monitor — Side-by-Side + Analyzed Playback</h1>
 
 <div class="row">
   <input id="file" type="file" accept="video/*" />
   <div id="drop" class="drop">or drop a video file here</div>
+  <button id="primeBtn">Prime Autoplay</button>
+  <button id="resetBtn">Reset App</button>
+  <button id="clearCacheBtn">Clear Cache</button>
 </div>
 
 <div class="row">
-  <select id="markerSel" title="Calibration object">
-    <option value="tray">Ball Tray (34×25 cm)</option>
-    <option value="letter">Letter 8.5×11 in</option>
-    <option value="a4">A4 210×297 mm</option>
-    <option value="custom">Custom…</option>
-  </select>
-  <input id="customW" type="number" step="0.001" placeholder="W (m)" style="width:110px;display:none">
-  <input id="customH" type="number" step="0.001" placeholder="D (m)" style="width:110px;display:none">
-  <span class="badge">Scale = tray/paper • Ball = ROI + Template</span>
+  <label>Scale source
+    <select id="scaleMode">
+      <option value="ball" selected>Golf ball (42.67 mm)</option>
+      <option value="tray">Tray/Paper (4‑point)</option>
+      <option value="none">None (pixels only)</option>
+    </select>
+  </label>
+  <span id="scaleBadge" class="badge">Scale: Ball (click-drag across ball)</span>
+</div>
+
+<div class="row" id="trayRow">
+  <button id="clearPtsBtn">Clear Tray Points</button>
+  <span class="status">Tap 4 corners of the tray/paper if tray mode is selected.</span>
+</div>
+
+<div class="row" id="ballRow">
+  <button id="setBallScaleBtn">Set Ball Scale</button>
+  <span class="status">Click–drag a diameter across the ball to set scale.</span>
+</div>
+
+<div class="row">
+  <button id="setRoiBtn">Set Ball ROI</button>
+  <button id="clearRoiBtn">Clear ROI</button>
+  <button id="setBallBtn">Set Ball Init</button>
+  <button id="clearBallBtn">Clear Ball</button>
+  <label>Template size <input id="tplSize" type="number" value="25" min="11" max="81" step="2" style="width:80px"></label>
+  <label>Search radius <input id="searchRad" type="number" value="90" min="20" max="240" style="width:90px"></label>
+  <label>Match thr <input id="matchThr" type="number" value="0.38" min="0.1" max="0.95" step="0.01" style="width:80px"></label>
+  <label>Gate (px) <input id="gatePx" type="number" value="60" min="10" max="240" style="width:80px"></label>
+  <label><input type="checkbox" id="tplAuto" checked> Auto‑update template</label>
 </div>
 
 <div class="row">
@@ -55,68 +81,38 @@
   </label>
   <label>Frames <input id="numFrames" type="number" value="180" min="6" max="900" style="width:90px"></label>
   <label>Δt (seek) <input id="deltaT" type="number" value="0.03333" step="0.0005" style="width:110px"><span class="status">≈1/30</span></label>
-</div>
-
-<div class="row">
-  <button id="setBallBtn">Set Ball Init</button>
-  <button id="clearBallBtn">Clear Ball</button>
-  <label>Template size <input id="tplSize" type="number" value="25" min="11" max="81" step="2" style="width:80px"></label>
-  <label>Search radius <input id="searchRad" type="number" value="90" min="20" max="240" style="width:90px"></label>
-  <label>Match threshold <input id="matchThr" type="number" value="0.38" min="0.1" max="0.95" step="0.01" style="width:90px"></label>
-  <label><input type="checkbox" id="tplAuto" checked> Auto‑update template</label>
-</div>
-
-<div class="row">
-  <button id="setRoiBtn">Set Ball ROI</button>
-  <button id="clearRoiBtn">Clear ROI</button>
-  <button id="clearPtsBtn">Clear Calib Pts</button>
-  <label>Gate (px) <input id="gatePx" type="number" value="60" min="10" max="240" style="width:80px"></label>
-</div>
-
-<div class="row">
-  <label><input type="checkbox" id="useTemplate" checked> Use template match</label>
-  <label><input type="checkbox" id="useMotion" checked> Use motion diff</label>
-</div>
-
-<div class="row">
-  <label><input type="checkbox" id="showTrail" checked> Show trail</label>
-  <label>Trail length <input id="trailLen" type="number" value="220" min="10" max="1000" style="width:90px"></label>
-  <label>Trail thickness <input id="trailThick" type="number" value="3" min="1" max="8" style="width:80px"></label>
-  <label><input type="checkbox" id="showPred" checked> Predicted path</label>
-  <button id="exportPngBtn">Export PNG</button>
-</div>
-
-<div class="row">
-  <button id="primeBtn">Prime Autoplay</button>
-  <button id="resetBtn">Reset App</button>
-  <button id="clearCacheBtn">Clear Cache</button>
-</div>
-
-<div class="row">
   <button id="analyzeBtn" class="primary" disabled>Analyze</button>
-  <button id="previewBtn" disabled>Preview overlay</button>
+  <button id="playAnalyzedBtn" disabled>Play analyzed</button>
+  <button id="pauseBtn" disabled>Pause</button>
+  <button id="stopBtn" disabled>Stop</button>
 </div>
 
-<div class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • CalibPoints 0/4 • ROI: ❌ • BallInit: ❌ • rVFC: ?</div>
-
-<video id="video" playsinline muted controls></video>
-<canvas id="canvas" width="1080" height="1920"></canvas>
-<p class="status">If tracking drifts, lower <b>Match threshold</b> a bit (0.32–0.4), widen <b>Search radius</b>, or increase <b>Gate</b>. Keep ROI tight around the ball’s flight.</p>
-
-<div class="stats">
-  <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
-  <div class="stat"><b>Launch</b><div id="launch" class="mono">–</div></div>
-  <div class="stat"><b>Azimuth</b><div id="azimuth" class="mono">–</div></div>
-  <div class="stat"><b>Carry (est.)</b><div id="carry" class="mono">–</div></div>
-  <div class="stat"><b>Frames</b><div id="nframes" class="mono">–</div></div>
+<div class="layout">
+  <div class="pane">
+    <h3>Raw Video</h3>
+    <video id="video" playsinline muted controls></video>
+  </div>
+  <div class="pane">
+    <h3>Analyzed View (overlay)</h3>
+    <canvas id="overlay" width="1080" height="1920"></canvas>
+    <div class="stats">
+      <div class="stat"><b>Ball Speed</b><div id="speed" class="mono">–</div></div>
+      <div class="stat"><b>Launch</b><div id="launch" class="mono">–</div></div>
+      <div class="stat"><b>Azimuth</b><div id="azimuth" class="mono">–</div></div>
+      <div class="stat"><b>Carry (est.)</b><div id="carry" class="mono">–</div></div>
+      <div class="stat"><b>Frames</b><div id="nframes" class="mono">–</div></div>
+    </div>
+  </div>
 </div>
+
+<p class="status mono" id="whyDisabled">Status: OpenCV ❌ • Video ❌ • ROI: ❌ • BallInit: ❌ • Scale: Ball • rVFC: ?</p>
 
 <h3 style="margin:12px 0 6px 0">Log</h3>
 <div id="log" class="mono">—</div>
 
 <script>
   window.cvReady = false;
-  window.Module = { onRuntimeInitialized() { window.cvReady = true; log('OpenCV ready ✅'); maybeEnableAnalyze(); } };
+  window.Module = { onRuntimeInitialized() { window.cvReady = true; log('OpenCV ready ✅'); maybeEnable(); } };
 </script>
 <script src="https://docs.opencv.org/4.x/opencv.js"></script>
 
@@ -125,36 +121,33 @@
 const fileInput = document.getElementById('file');
 const drop = document.getElementById('drop');
 const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const markerSel = document.getElementById('markerSel');
-const customW = document.getElementById('customW');
-const customH = document.getElementById('customH');
-const methodSel = document.getElementById('method');
-const numFramesEl = document.getElementById('numFrames');
-const deltaTEl = document.getElementById('deltaT');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const scaleModeSel = document.getElementById('scaleMode');
+const scaleBadge = document.getElementById('scaleBadge');
+const trayRow = document.getElementById('trayRow');
+const ballRow = document.getElementById('ballRow');
+const clearPtsBtn = document.getElementById('clearPtsBtn');
+const setBallScaleBtn = document.getElementById('setBallScaleBtn');
 const setRoiBtn = document.getElementById('setRoiBtn');
 const clearRoiBtn = document.getElementById('clearRoiBtn');
-const clearPtsBtn = document.getElementById('clearPtsBtn');
 const setBallBtn = document.getElementById('setBallBtn');
 const clearBallBtn = document.getElementById('clearBallBtn');
 const primeBtn = document.getElementById('primeBtn');
 const resetBtn = document.getElementById('resetBtn');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
 const analyzeBtn = document.getElementById('analyzeBtn');
-const previewBtn = document.getElementById('previewBtn');
-const exportPngBtn = document.getElementById('exportPngBtn');
-const showTrail = document.getElementById('showTrail');
-const trailLen = document.getElementById('trailLen');
-const trailThick = document.getElementById('trailThick');
-const showPred = document.getElementById('showPred');
-const useTemplate = document.getElementById('useTemplate');
-const useMotion = document.getElementById('useMotion');
+const playAnalyzedBtn = document.getElementById('playAnalyzedBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const stopBtn = document.getElementById('stopBtn');
 const tplSizeEl = document.getElementById('tplSize');
 const searchRadEl = document.getElementById('searchRad');
 const matchThrEl = document.getElementById('matchThr');
 const gatePxEl = document.getElementById('gatePx');
 const tplAutoEl = document.getElementById('tplAuto');
+const methodSel = document.getElementById('method');
+const numFramesEl = document.getElementById('numFrames');
+const deltaTEl = document.getElementById('deltaT');
 const why = document.getElementById('whyDisabled');
 const logEl = document.getElementById('log');
 
@@ -167,24 +160,27 @@ const out = {
 };
 
 /* ---------- State ---------- */
-let calibPts = []; // 4 pts for scale plane
-let roiRect = null; // {x,y,w,h}
-let roiMode = false;
-let roiStart = null;
-let lastCenters = []; // for preview & trail
-let lastFrames = [];  // for preview
-let objectURL = null;
-let trailPoints = []; // [{x,y}]
-let predictedPath = []; // [{x,y}]
-let lastH = null;
-let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 1080x1920 @ 30fps
-let ballInit = null; // {x,y, tpl: cv.Mat, w,h}
+let calibPts = []; // for tray mode (4 pts)
+let roiRect = null;
+let roiMode = false, roiStart = null;
+let ballScaleMode = false, ballScaleStart = null, ballScalePx = null; // pixel diameter
+let ballInit = null; // {x,y, tpl, w,h}
 let setBallMode = false;
+let lastCenters = [];
+let lastFrames = [];
+let analysisStartMediaTime = 0;
+let objectURL = null;
+let trailPoints = [];
+let predictedPath = [];
+let m_per_px = null; // when using ball or none
+let minAreaFrac = 0.00002, maxAreaFrac = 0.003; // tuned for 1080x1920
+let playingAnalyzed = false;
+let rAFHandle = 0;
+let hasRVFC = false;
 
-/* ---------- Logging ---------- */
 function log(msg){ logEl.textContent = (logEl.textContent==='—'?'':logEl.textContent+'\n') + msg; logEl.scrollTop = logEl.scrollHeight; }
 
-/* ---------- Wait helper ---------- */
+/* ---------- Helpers ---------- */
 function waitForEvent(el, type, timeout=12000){
   return new Promise((resolve, reject)=>{
     const on = () => { cleanup(); resolve(); };
@@ -193,8 +189,6 @@ function waitForEvent(el, type, timeout=12000){
     el.addEventListener(type, on, { once:true });
   });
 }
-
-/* ---------- Reset / Cache ---------- */
 function cleanupObjectURL(){ if (objectURL) { URL.revokeObjectURL(objectURL); objectURL = null; } }
 function resetApp(){
   try {
@@ -202,27 +196,22 @@ function resetApp(){
     video.pause(); video.removeAttribute('src'); video.load();
     fileInput.value = '';
     calibPts = []; roiRect = null; roiMode = false; roiStart = null;
-    lastCenters = []; lastFrames = []; trailPoints = []; predictedPath = []; lastH = null;
-    if (ballInit && ballInit.tpl) { ballInit.tpl.delete(); }
-    ballInit = null; setBallMode = false;
-    drawFrame();
+    ballScaleMode=false; ballScaleStart=null; ballScalePx=null; m_per_px=null;
+    if (ballInit && ballInit.tpl) ballInit.tpl.delete(); ballInit=null; setBallMode=false;
+    lastCenters=[]; lastFrames=[]; trailPoints=[]; predictedPath=[];
+    ctx.clearRect(0,0,overlay.width,overlay.height);
     log('App reset');
   } catch(e){ log('Reset error: '+e.message); }
-  maybeEnableAnalyze();
+  maybeEnable();
 }
 resetBtn.onclick = resetApp;
 clearCacheBtn.onclick = async ()=>{
   if (!('caches' in window)) { log('Cache API not available'); return; }
   const keys = await caches.keys();
   await Promise.all(keys.map(k=>caches.delete(k)));
-  log('Cleared service worker caches. Hard reload the page to ensure fresh code.');
-};
-exportPngBtn.onclick = () => {
-  try { const a = document.createElement('a'); a.download = 'mp-launch-monitor-overlay.png'; a.href = canvas.toDataURL('image/png'); a.click(); }
-  catch(e) { log('Export PNG failed: '+e.message); }
+  log('Cleared service worker caches. Hard reload to ensure fresh code.');
 };
 
-/* ---------- Video events ---------- */
 video.addEventListener('error', () => {
   const e = video.error; const map = { 1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED' };
   log(`Video error: ${e? (map[e.code]||e.code) : 'unknown'}`);
@@ -231,13 +220,19 @@ video.addEventListener('error', () => {
   video.addEventListener(ev, ()=> log(`video event: ${ev}, readyState=${video.readyState}`));
 });
 
-/* ---------- UI reactions ---------- */
-markerSel.onchange = () => {
-  const isCustom = markerSel.value === 'custom';
-  customW.style.display = isCustom ? '' : 'none';
-  customH.style.display = isCustom ? '' : 'none';
-  maybeEnableAnalyze();
+/* ---------- Scaling mode ---------- */
+scaleModeSel.onchange = () => {
+  const mode = scaleModeSel.value;
+  trayRow.style.display = (mode==='tray') ? '' : 'none';
+  ballRow.style.display = (mode==='ball') ? '' : 'none';
+  scaleBadge.textContent = (mode==='tray') ? 'Scale: Tray/Paper (4‑point)' : (mode==='ball' ? 'Scale: Ball (drag diameter)' : 'Scale: None (pixels)');
+  maybeEnable();
 };
+/* default visibility */
+trayRow.style.display = 'none';
+ballRow.style.display = '';
+
+/* ---------- File & Drop ---------- */
 fileInput.onchange = async (e) => {
   try {
     const f = e.target.files && e.target.files[0];
@@ -263,39 +258,45 @@ async function loadVideoFile(file){
     video.src = objectURL;
     await waitForEvent(video,'loadedmetadata',15000);
     log(`loadedmetadata: ${video.videoWidth}×${video.videoHeight}, duration≈${(video.duration||0).toFixed(2)}s`);
-    drawFrame();
+    overlay.width = video.videoWidth || 1080; overlay.height = video.videoHeight || 1920;
+    drawOverlayFrame(); // initial
     try { await video.play(); } catch(_){}
     await waitForEvent(video,'canplay',15000).catch(()=>{});
     video.pause();
     video.currentTime = Math.min(0.03, Math.max(0, (video.duration||0) * 0.01));
     await waitForEvent(video,'seeked',15000);
-    drawFrame();
+    drawOverlayFrame();
     const area = Math.max(1, (video.videoWidth||1920) * (video.videoHeight||1080));
     const minA = Math.max(6, Math.floor(area * minAreaFrac));
     const maxA = Math.max(minA+1, Math.floor(area * maxAreaFrac));
     log(`Detection area bounds: min≈${minA}, max≈${maxA}`);
     window.MP_DET = {minA, maxA};
-    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[]; trailPoints=[]; predictedPath=[]; lastH=null;
-    if (ballInit && ballInit.tpl) { ballInit.tpl.delete(); } ballInit = null; setBallMode=false;
-  } finally { maybeEnableAnalyze(); }
+    hasRVFC = !!video.requestVideoFrameCallback;
+    calibPts = []; roiRect = null; lastCenters=[]; lastFrames=[]; trailPoints=[]; predictedPath=[];
+  } finally { maybeEnable(); }
 }
+
 primeBtn.onclick = async () => {
-  try { video.muted = true; await video.play(); await new Promise(r => setTimeout(r, 150)); video.pause(); log('Autoplay primed (user gesture → play/pause)'); maybeEnableAnalyze(); }
+  try { video.muted = true; await video.play(); await new Promise(r => setTimeout(r, 150)); video.pause(); log('Autoplay primed (play→pause)'); maybeEnable(); }
   catch(e) { log('Autoplay prime failed: ' + e.message); }
 };
 
 /* ---------- Canvas interactions ---------- */
-canvas.addEventListener('pointerdown', (e) => {
+overlay.addEventListener('pointerdown', (e) => {
   const {x,y} = canvasXY(e);
+  if (ballScaleMode) {
+    ballScaleStart = {x,y};
+    return;
+  }
   if (setBallMode) {
     setBallMode = false;
-    const size = Math.max(11, Math.min(81, (parseInt(tplSizeEl.value||'25',10)|1))); // odd
+    const size = Math.max(11, Math.min(81, (parseInt(tplSizeEl.value||'25',10)|1)));
     const half = (size-1)/2;
-    const cx = Math.max(half, Math.min(canvas.width-half-1, x|0));
-    const cy = Math.max(half, Math.min(canvas.height-half-1, y|0));
+    const cx = Math.max(half, Math.min(overlay.width-half-1, x|0));
+    const cy = Math.max(half, Math.min(overlay.height-half-1, y|0));
     const roi = new cv.Rect(cx-half, cy-half, size, size);
-    drawFrame();
-    const frame = ctx.getImageData(0,0,canvas.width,canvas.height);
+    drawOverlayFrame();
+    const frame = ctx.getImageData(0,0,overlay.width,overlay.height);
     let src = cv.matFromImageData(frame);
     let gray = new cv.Mat(); cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
     let tpl = gray.roi(roi).clone();
@@ -303,62 +304,89 @@ canvas.addEventListener('pointerdown', (e) => {
     if (ballInit && ballInit.tpl) { ballInit.tpl.delete(); }
     ballInit = {x: cx, y: cy, tpl, w: size, h: size};
     log(`Ball template set @ (${cx}, ${cy}) size ${size}×${size}`);
-    drawFrame();
+    drawOverlayFrame();
     ctx.save(); ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(cx-half, cy-half, size, size); ctx.restore();
-    maybeEnableAnalyze();
+    maybeEnable();
     return;
   }
   if (roiMode) { roiStart = {x,y}; return; }
-  if (calibPts.length < 4) {
-    calibPts.push([x,y]); drawFrame();
-    log(`Calib point ${calibPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`);
-    maybeEnableAnalyze();
+  if (scaleModeSel.value === 'tray' && calibPts.length < 4) {
+    calibPts.push([x,y]); drawOverlayFrame();
+    log(`Tray point ${calibPts.length}/4: (${x.toFixed(1)}, ${y.toFixed(1)})`);
+    maybeEnable();
   }
 });
-canvas.addEventListener('pointermove', (e) => { if (!roiMode || !roiStart) return; drawFrame(tempRect(roiStart, canvasXY(e))); });
-canvas.addEventListener('pointerup',   (e) => { if (!roiMode || !roiStart) return; roiRect = normRect(roiStart, canvasXY(e)); roiStart = null; roiMode = false; drawFrame(); log(`ROI set: x=${roiRect.x|0}, y=${roiRect.y|0}, w=${roiRect.w|0}, h=${roiRect.h|0}`); maybeEnableAnalyze(); });
+overlay.addEventListener('pointermove', (e) => {
+  const {x,y} = canvasXY(e);
+  if (ballScaleMode && ballScaleStart) {
+    drawOverlayFrame();
+    ctx.save();
+    ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(ballScaleStart.x, ballScaleStart.y); ctx.lineTo(x,y); ctx.stroke();
+    const d = Math.hypot(x - ballScaleStart.x, y - ballScaleStart.y);
+    ctx.fillStyle = '#ffd166'; ctx.fillText(`${d.toFixed(1)} px`, x+8, y+8);
+    ctx.restore();
+  } else if (roiMode && roiStart) {
+    drawOverlayFrame(normRect(roiStart, {x,y}));
+  }
+});
+overlay.addEventListener('pointerup', (e) => {
+  const {x,y} = canvasXY(e);
+  if (ballScaleMode && ballScaleStart) {
+    const d = Math.hypot(x - ballScaleStart.x, y - ballScaleStart.y);
+    ballScalePx = Math.max(5, d);
+    m_per_px = 0.04267 / ballScalePx; // 42.67 mm
+    ballScaleMode = false; ballScaleStart = null;
+    log(`Ball scale set: ${ballScalePx.toFixed(2)} px → ${m_per_px.toExponential(3)} m/px`);
+    drawOverlayFrame();
+    maybeEnable();
+    return;
+  }
+  if (roiMode && roiStart) {
+    roiRect = normRect(roiStart, {x,y}); roiStart = null; roiMode = false;
+    drawOverlayFrame();
+    log(`ROI set: x=${roiRect.x|0}, y=${roiRect.y|0}, w=${roiRect.w|0}, h=${roiRect.h|0}`);
+    maybeEnable();
+  }
+});
 
-setRoiBtn.onclick = () => { roiMode = true; log('Draw ROI on canvas (drag)...'); };
-clearRoiBtn.onclick = () => { roiRect = null; drawFrame(); log('Cleared ROI'); maybeEnableAnalyze(); };
-clearPtsBtn.onclick = () => { calibPts = []; drawFrame(); log('Cleared calibration points'); maybeEnableAnalyze(); };
-setBallBtn.onclick = () => { setBallMode = true; log('Click the ball to capture a template (prefer just before impact)'); };
-clearBallBtn.onclick = () => { if (ballInit && ballInit.tpl) { ballInit.tpl.delete(); } ballInit = null; drawFrame(); log('Cleared ball template'); maybeEnableAnalyze(); };
-
-function canvasXY(e){ const r = canvas.getBoundingClientRect(); const x = (e.clientX - r.left) * canvas.width / r.width; const y = (e.clientY - r.top) * canvas.height / r.height; return {x,y}; }
-function tempRect(a,b){ return normRect(a,b); }
-function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
+setRoiBtn.onclick = () => { roiMode = true; log('Draw ROI on overlay (drag)...'); };
+clearRoiBtn.onclick = () => { roiRect = null; drawOverlayFrame(); log('Cleared ROI'); maybeEnable(); };
+clearPtsBtn.onclick = () => { calibPts = []; drawOverlayFrame(); log('Cleared tray points'); maybeEnable(); };
+setBallBtn.onclick = () => { setBallMode = true; log('Click the ball on the overlay to capture a template'); };
+clearBallBtn.onclick = () => { if (ballInit && ballInit.tpl) ballInit.tpl.delete(); ballInit = null; drawOverlayFrame(); log('Cleared ball template'); maybeEnable(); };
+setBallScaleBtn.onclick = () => { ballScaleMode = true; log('Click–drag a diameter across the ball'); };
 
 /* ---------- Drawing ---------- */
-function drawFrame(drawTempRect=null) {
+function drawOverlayFrame(tempRect){
   const vw = video.videoWidth || 1080, vh = video.videoHeight || 1920;
-  canvas.width = vw; canvas.height = vh;
-  ctx.drawImage(video, 0, 0, vw, vh);
+  overlay.width = vw; overlay.height = vh;
+  try { ctx.drawImage(video, 0, 0, vw, vh); } catch(_){ /* might not be ready */ }
   ctx.save();
-  // calibration hull
-  ctx.fillStyle = '#ff725c'; ctx.strokeStyle = '#ff725c'; ctx.lineWidth = 3;
-  calibPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
-  if (calibPts.length === 4) { ctx.beginPath(); ctx.moveTo(calibPts[0][0], calibPts[0][1]); for (let i=1;i<4;i++) ctx.lineTo(calibPts[i][0], calibPts[i][1]); ctx.closePath(); ctx.stroke(); }
+  // tray hull
+  if (scaleModeSel.value === 'tray') {
+    ctx.fillStyle = '#ff725c'; ctx.strokeStyle = '#ff725c'; ctx.lineWidth = 3;
+    calibPts.forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,10,0,Math.PI*2); ctx.fill(); });
+    if (calibPts.length === 4) { ctx.beginPath(); ctx.moveTo(calibPts[0][0], calibPts[0][1]); for (let i=1;i<4;i++) ctx.lineTo(calibPts[i][0], calibPts[i][1]); ctx.closePath(); ctx.stroke(); }
+  }
   // ROI
   if (roiRect) { ctx.strokeStyle = '#4cd964'; ctx.lineWidth = 3; ctx.strokeRect(roiRect.x, roiRect.y, roiRect.w, roiRect.h); }
-  // Ball template marker
+  if (tempRect) { ctx.setLineDash([6,6]); ctx.strokeStyle = '#4cd964aa'; ctx.lineWidth = 2; ctx.strokeRect(tempRect.x, tempRect.y, tempRect.w, tempRect.h); ctx.setLineDash([]); }
+  // Ball template box
   if (ballInit && ballInit.tpl) {
     const half = (ballInit.w-1)/2;
     ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 2; ctx.strokeRect(ballInit.x-half, ballInit.y-half, ballInit.w, ballInit.h);
   }
-  // Trail
-  if (showTrail.checked && trailPoints.length>1) drawTrail(trailPoints, Number(trailThick.value||3));
-  // Predicted path
-  if (showPred.checked && predictedPath.length>1) drawPredicted(predictedPath);
-  // temp rect
-  if (drawTempRect) { ctx.setLineDash([6,6]); ctx.strokeStyle = '#4cd964aa'; ctx.lineWidth = 2; ctx.strokeRect(drawTempRect.x, drawTempRect.y, drawTempRect.w, drawTempRect.h); ctx.setLineDash([]); }
+  // Trail (persisted)
+  if (trailPoints.length>1) drawTrail(trailPoints, 3);
   ctx.restore();
 }
+
 function drawTrail(pts, thick){
-  const n = Math.min(pts.length, Number(trailLen.value||220));
+  const n = Math.min(pts.length, 240);
   const start = pts.length - n;
   for(let i=start+1;i<pts.length;i++){
     const p0 = pts[i-1], p1 = pts[i];
-    const a = (i-start)/n; // 0..1
+    const a = (i-start)/n;
     ctx.strokeStyle = `rgba(76, 217, 100, ${Math.max(0.12, Math.min(0.85, a))})`;
     ctx.lineWidth = Math.max(1, thick * (0.6 + 0.4*a));
     ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
@@ -366,61 +394,29 @@ function drawTrail(pts, thick){
   const tip = pts[pts.length-1];
   ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(tip.x, tip.y, Math.max(6, thick+2), 0, Math.PI*2); ctx.fill();
 }
-function drawPredicted(pts){
-  ctx.save();
-  ctx.setLineDash([8,6]); ctx.strokeStyle = 'rgba(255,114,92,0.85)'; ctx.lineWidth = 2.5;
-  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
-  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  const tip = pts[pts.length-1];
-  ctx.fillStyle = 'rgba(255,114,92,0.9)'; ctx.beginPath(); ctx.arc(tip.x, tip.y, 5, 0, Math.PI*2); ctx.fill();
-  ctx.restore();
-}
 
-/* ---------- Enable/Status ---------- */
-function maybeEnableAnalyze() {
-  const okCV = window.cvReady && typeof cv !== 'undefined';
-  const okVid = !!video.src && (video.readyState >= 2);
-  const okPts = calibPts.length === 4;
-  const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
-  const okBall = !!(ballInit && ballInit.tpl);
-  const hasRVFC = !!video.requestVideoFrameCallback;
-  analyzeBtn.disabled = !(okCV && okVid && okPts && okROI);
-  previewBtn.disabled = lastCenters.length === 0;
-  why.textContent = `Status: OpenCV ${okCV ? '✅' : '❌'} • Video ${okVid ? '✅' : '❌'} • CalibPoints ${calibPts.length}/4 • ROI: ${okROI?'✅':'❌'} • BallInit: ${okBall?'✅':'❌'} • rVFC: ${hasRVFC ? '✅' : '❌'}`;
-}
+function canvasXY(e){ const r = overlay.getBoundingClientRect(); const x = (e.clientX - r.left) * overlay.width / r.width; const y = (e.clientY - r.top) * overlay.height / r.height; return {x,y}; }
+function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
 
-/* ---------- Calibration & Transforms ---------- */
-function calibMeters() {
-  if (markerSel.value === 'tray')   return [0.34, 0.25];
-  if (markerSel.value === 'letter') return [0.2159, 0.2794];
-  if (markerSel.value === 'a4')     return [0.2100, 0.2970];
-  if (markerSel.value === 'custom') { const w = parseFloat(customW.value||'0'); const h = parseFloat(customH.value||'0'); if (w>0 && h>0) return [w,h]; }
-  return [0.2159, 0.2794];
-}
-function solveHomography(src4, dst4) {
-  const src = cv.matFromArray(4,1,cv.CV_32FC2, src4.flat());
-  const dst = cv.matFromArray(4,1,cv.CV_32FC2, dst4.flat());
-  const H = cv.findHomography(src, dst, cv.RANSAC, 5.0);
-  src.delete(); dst.delete();
-  if (!H || H.rows === 0 || H.cols === 0) throw new Error('Homography failed (empty).');
-  return H;
-}
-function applyH(H, pt) { const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
-function invertH(H){ const dst = new cv.Mat(); cv.invert(H, dst, cv.DECOMP_LU); return dst; }
-function applyHInv(Hinv, pt){ const [x,y]=pt; const h = Hinv.data64F||Hinv.data32F; const a=h[0]*x + h[1]*y + h[2], b=h[3]*x + h[4]*y + h[5], c=h[6]*x + h[7]*y + h[8]; return [a/c, b/c]; }
-
-/* ---------- Frame extraction ---------- */
+/* ---------- Extraction ---------- */
 async function extractFramesSeek(n=180, dt=0.03333){
   const frames=[]; let t=video.currentTime; const dur = video.duration || 1e9;
-  for(let i=0;i<n;i++){ if (t > dur) break; video.currentTime = t; await new Promise(res=>{ video.onseeked = res; }); drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t, idx:i}); why.textContent = `Sampling (seek): ${i+1}/${n}`; await new Promise(requestAnimationFrame); t += dt; }
+  analysisStartMediaTime = t;
+  for(let i=0;i<n;i++){ if (t > dur) break; video.currentTime = t; await new Promise(res=>{ video.onseeked = res; }); drawOverlayFrame(); frames.push({img: ctx.getImageData(0,0,overlay.width,overlay.height), t, idx:i}); why.textContent = `Sampling (seek): ${i+1}/${n}`; await new Promise(requestAnimationFrame); t += dt; }
   return frames;
 }
 async function extractFramesRVFC(n=180){
   const frames=[]; let count=0; let handle=0;
+  analysisStartMediaTime = video.currentTime;
   const onframe = (now, meta) => {
-    try{ drawFrame(); frames.push({img: ctx.getImageData(0,0,canvas.width,canvas.height), t: meta.mediaTime, idx: count}); why.textContent = `Sampling (rVFC): ${count+1}/${n}`; count++; if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; } handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe)); }catch(e){ console.error(e); done(e); }
+    try{
+      drawOverlayFrame();
+      frames.push({img: ctx.getImageData(0,0,overlay.width,overlay.height), t: meta.mediaTime, idx: count});
+      why.textContent = `Sampling (rVFC): ${count+1}/${n}`;
+      count++;
+      if (count >= n) { video.pause(); cancelAnimationFrame(handle); done(); return; }
+      handle = requestAnimationFrame(()=> video.requestVideoFrameCallback(onframe));
+    }catch(e){ console.error(e); done(e); }
   };
   let doneResolve, doneReject; const done = (err) => { err ? doneReject(err) : doneResolve(); }; const p = new Promise((res, rej)=>{ doneResolve=res; doneReject=rej; });
   video.muted = true; video.playbackRate = 0.1; try { await video.play(); } catch(_){}
@@ -428,39 +424,23 @@ async function extractFramesRVFC(n=180){
   await p; return frames;
 }
 
-/* ---------- Lightweight α‑β (g‑h) filter used when cv.KalmanFilter is unavailable ---------- */
+/* ---------- α‑β filter for prediction ---------- */
 class GHFilter {
-  constructor(alpha=0.6, beta=0.8){
-    this.alpha = alpha; this.beta = beta;
-    this.x = null; this.y = null; this.vx = 0; this.vy = 0;
-  }
-  predict(dt){
-    if (this.x===null) return [null,null];
-    return [this.x + this.vx*dt, this.y + this.vy*dt];
-  }
-  correct(mx, my, dt){
-    if (this.x===null){ this.x = mx; this.y = my; this.vx = 0; this.vy = 0; return [this.x, this.y]; }
-    const px = this.x + this.vx*dt, py = this.y + this.vy*dt;
-    const rx = mx - px,           ry = my - py;
-    this.x = px + this.alpha * rx;
-    this.y = py + this.alpha * ry;
-    this.vx = this.vx + (this.beta/dt) * rx;
-    this.vy = this.vy + (this.beta/dt) * ry;
-    return [this.x, this.y];
-  }
+  constructor(alpha=0.65, beta=0.85){ this.alpha=alpha; this.beta=beta; this.x=null; this.y=null; this.vx=0; this.vy=0; }
+  predict(dt){ if (this.x===null) return [null,null]; return [this.x + this.vx*dt, this.y + this.vy*dt]; }
+  correct(mx,my,dt){ if (this.x===null){ this.x=mx; this.y=my; this.vx=0; this.vy=0; return [this.x,this.y]; } const px=this.x+this.vx*dt, py=this.y+this.vy*dt; const rx=mx-px, ry=my-py; this.x = px + this.alpha*rx; this.y = py + this.alpha*ry; this.vx = this.vx + (this.beta/dt)*rx; this.vy = this.vy + (this.beta/dt)*ry; return [this.x,this.y]; }
 }
 
-/* ---------- Tracker: template + motion + GHFilter gating ---------- */
+/* ---------- Detection ---------- */
 function detectCenters(frames, roi){
   const centers=[]; let prevGray=null;
-  trailPoints = []; // reset trail
+  trailPoints = [];
   const minA = (window.MP_DET && window.MP_DET.minA) || 8;
   const maxA = (window.MP_DET && window.MP_DET.maxA) || 600;
-  const useTpl = useTemplate.checked && ballInit && ballInit.tpl;
-  const useMot = useMotion.checked;
+  const useTpl = !!(ballInit && ballInit.tpl);
   const gatePx = Math.max(10, parseInt(gatePxEl.value||'60',10));
   const tplAuto = tplAutoEl.checked;
-  const tplSize = ballInit ? ballInit.w : Math.max(11, parseInt(tplSizeEl.value||'25',10)|1);
+  const r = Math.max(20, parseInt(searchRadEl.value||'90',10));
   const mthr = parseFloat(matchThrEl.value||'0.38');
   const gh = new GHFilter(0.65, 0.85);
   let lastPos = ballInit ? [ballInit.x, ballInit.y] : [roi.x+roi.w/2, roi.y+roi.h/2];
@@ -474,18 +454,15 @@ function detectCenters(frames, roi){
     if (rect.width<=2 || rect.height<=2){ src.delete(); grayFull.delete(); break; }
     let gray = grayFull.roi(rect);
 
-    // Predict
-    let predicted = gh.predict(dt);
-    if (predicted[0]===null) predicted = lastPos;
+    let predicted = gh.predict(dt); if (predicted[0]===null) predicted = lastPos;
 
-    // TEMPLATE MATCH around last or predicted
+    // TEMPLATE
     let tplBest=null, tplScore=-1;
     if (useTpl){
       const cx = lastPos[0], cy = lastPos[1];
-      const r = Math.max(20, parseInt(searchRadEl.value||'90',10));
       const sx = Math.max(rect.x, (cx - r)|0), sy = Math.max(rect.y, (cy - r)|0);
       const ex = Math.min(rect.x+rect.width,  cx + r), ey = Math.min(rect.y+rect.height, cy + r);
-      const sw = Math.max((ballInit.tpl.cols||tplSize)+1, ex - sx), sh = Math.max((ballInit.tpl.rows||tplSize)+1, ey - sy);
+      const sw = Math.max((ballInit.tpl.cols||25)+1, ex - sx), sh = Math.max((ballInit.tpl.rows||25)+1, ey - sy);
       const srect = new cv.Rect(sx, sy, sw, sh);
       let search = grayFull.roi(srect);
       let res = new cv.Mat();
@@ -497,82 +474,74 @@ function detectCenters(frames, roi){
       res.delete(); search.delete();
     }
 
-    // MOTION DIFF in ROI
+    // MOTION
     let motBest=null;
-    if (useMot){
-      let work = new cv.Mat();
-      if(prevGray){ cv.absdiff(gray,prevGray,work); } else { work = gray.clone(); }
-      cv.GaussianBlur(work,work,new cv.Size(3,3),0);
-      cv.threshold(work,work,0,255,cv.THRESH_BINARY|cv.THRESH_OTSU);
-      const kernel = cv.Mat.ones(3,3,cv.CV_8U); cv.morphologyEx(work,work,cv.MORPH_OPEN,kernel);
-      const contours = new cv.MatVector(), hier = new cv.Mat();
-      cv.findContours(work,contours,hier,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
-      let bestScore=-1;
-      for(let i=0;i<contours.size();i++){
-        const c = contours.get(i); const area = cv.contourArea(c);
-        if(area<minA || area>maxA){ c.delete(); continue; }
-        const m = cv.moments(c,true);
-        let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
-        cx += rect.x; cy += rect.y;
-        const rectB = cv.boundingRect(c);
-        const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
-        const d = Math.hypot(cx - predicted[0], cy - predicted[1]);
-        const score = circ + Math.min(1, area/250.0) + (d>0 ? (1/(1+d/50)) : 1.5);
-        if(score>bestScore){ bestScore=score; motBest={x:cx,y:cy}; }
-        c.delete();
-      }
-      work.delete(); kernel.delete(); contours.delete(); hier.delete();
+    let work = new cv.Mat();
+    if(prevGray){ cv.absdiff(gray,prevGray,work); } else { work = gray.clone(); }
+    cv.GaussianBlur(work,work,new cv.Size(3,3),0);
+    cv.threshold(work,work,0,255,cv.THRESH_BINARY|cv.THRESH_OTSU);
+    const kernel = cv.Mat.ones(3,3,cv.CV_8U); cv.morphologyEx(work,work,cv.MORPH_OPEN,kernel);
+    const contours = new cv.MatVector(), hier = new cv.Mat();
+    cv.findContours(work,contours,hier,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+    let bestScore=-1;
+    for(let i=0;i<contours.size();i++){
+      const c = contours.get(i); const area = cv.contourArea(c);
+      if(area<minA || area>maxA){ c.delete(); continue; }
+      const m = cv.moments(c,true);
+      let cx = m.m10/(m.m00+1e-9), cy = m.m01/(m.m00+1e-9);
+      cx += rect.x; cy += rect.y;
+      const rectB = cv.boundingRect(c);
+      const circ = Math.min(rectB.width,rectB.height)/Math.max(rectB.width,rectB.height);
+      const d = Math.hypot(cx - predicted[0], cy - predicted[1]);
+      const score = circ + Math.min(1, area/250.0) + (d>0 ? (1/(1+d/50)) : 1.5);
+      if(score>bestScore){ bestScore=score; motBest={x:cx,y:cy}; }
+      c.delete();
     }
+    work.delete(); kernel.delete(); contours.delete(); hier.delete();
 
     // Fuse
     const dTpl = tplBest ? Math.hypot(tplBest.x - predicted[0], tplBest.y - predicted[1]) : 1e9;
     const dMot = motBest ? Math.hypot(motBest.x - predicted[0], motBest.y - predicted[1]) : 1e9;
     let chosen = null;
-    if (useTpl && tplBest && tplBest.score >= mthr && dTpl <= gatePx) chosen = {x:tplBest.x, y:tplBest.y};
-    else if (useMot && motBest && dMot <= gatePx*1.5) chosen = {x:motBest.x, y:motBest.y};
-    else if (useTpl && tplBest && dTpl <= gatePx*2) chosen = {x:tplBest.x, y:tplBest.y};
-    else if (useMot && motBest) chosen = {x:motBest.x, y:motBest.y};
+    if (tplBest && tplBest.score >= mthr && dTpl <= gatePx) chosen = {x:tplBest.x, y:tplBest.y};
+    else if (motBest && dMot <= gatePx*1.5) chosen = {x:motBest.x, y:motBest.y};
+    else if (tplBest && dTpl <= gatePx*2) chosen = {x:tplBest.x, y:tplBest.y};
+    else if (motBest) chosen = {x:motBest.x, y:motBest.y};
     else chosen = {x: predicted[0], y: predicted[1]};
 
-    // α‑β filter correction
     const corr = gh.correct(chosen.x, chosen.y, dt);
     const x = corr[0], y = corr[1];
     lastPos = [x,y];
 
-    // Optional auto‑update template to adapt blur/lighting/scale
+    // Auto-update template
     if (useTpl && tplAuto && (fi % 5 === 0)) {
-      const size = tplSize;
+      const size = ballInit.w;
       const half = (size-1)/2;
-      const cx = Math.max(half, Math.min(canvas.width-half-1, x|0));
-      const cy = Math.max(half, Math.min(canvas.height-half-1, y|0));
+      const cx = Math.max(half, Math.min(overlay.width-half-1, x|0));
+      const cy = Math.max(half, Math.min(overlay.height-half-1, y|0));
       const roiU = new cv.Rect(cx-half, cy-half, size, size);
-      let g2 = grayFull; // full gray
-      let patch = g2.roi(roiU).clone();
-      if (ballInit && ballInit.tpl) ballInit.tpl.delete();
-      ballInit = {x: cx, y: cy, tpl: patch, w: size, h: size};
+      let patch = grayFull.roi(roiU).clone();
+      ballInit.tpl.delete(); ballInit = {x: cx, y: cy, tpl: patch, w: size, h: size};
     }
 
     centers.push({x,y,t:f.t, idx:f.idx});
     trailPoints.push({x,y});
-    if (showTrail.checked) { drawFrame(); drawTrail(trailPoints, Number(trailThick.value||3)); }
-    ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
 
-    // Prepare prevGray
     if (prevGray) prevGray.delete();
     prevGray = gray.clone();
     gray.delete(); src.delete(); grayFull.delete();
-    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length} (tpl=${(tplBest?tplBest.score:0).toFixed(2)})`;
+    why.textContent = `Detecting ball: ${f.idx+1}/${frames.length} (tpl=${(tplScore>0?tplScore:0).toFixed(2)})`;
   }
   if (prevGray) prevGray.delete();
   return centers;
 }
 
-/* ---------- Kinematics & Predicted path ---------- */
-function estimateCarry(v0, theta, drag=0.75){ const g=9.80665; return (v0*v0/g)*Math.sin(2*theta)*drag; }
-function fitKinematics(centers, H){
+/* ---------- Kinematics ---------- */
+function fitKinematicsTray(centers, H){
+  // ground-plane via homography
+  function applyH(H, pt){ const [u,v]=pt; const h = H.data64F||H.data32F; const a=h[0]*u + h[1]*v + h[2], b=h[3]*u + h[4]*v + h[5], c=h[6]*u + h[7]*v + h[8]; return [a/c, b/c]; }
   const ground = centers.map(c=>applyH(H,[c.x,c.y]).concat([c.t]));
-  const i0=0, i2=Math.min(2, ground.length-1);
-  if (i2 <= i0) return null;
+  const i0=0, i2=Math.min(2, ground.length-1); if (i2<=i0) return null;
   const dt = ground[i2][2] - ground[i0][2] || 0.03333;
   const vx = (ground[i2][0]-ground[i0][0]) / dt;
   const vy = (ground[i2][1]-ground[i0][1]) / dt;
@@ -581,43 +550,40 @@ function fitKinematics(centers, H){
   const theta = Math.atan2(-dy_img, vxy*40); // heuristic
   const phi = Math.atan2(vy, vx);
   const v0 = vxy / Math.cos(theta);
-  const carry_m = estimateCarry(v0, theta, 0.75);
-  return { v0, theta, phi, carry_m, n: centers.length, vx, vy, start: ground[0] };
+  const carry_m = (v0*v0/9.80665)*Math.sin(2*theta)*0.75;
+  return { v0, theta, phi, carry_m, n: centers.length };
 }
-function computePredictedPath(H, centers, kin){
-  try {
-    if (!centers.length || !H) return [];
-    const Hinv = invertH(H);
-    lastH = H.clone ? H.clone() : H;
-    const pts = [];
-    const dt = 0.03333; // draw ~30 fps
-    const steps = 120;   // ~4 s
-    const startPix = [centers[0].x, centers[0].y];
-    const startGround = applyH(H, startPix);
-    const v0 = kin.v0, theta = kin.theta, phi = kin.phi;
-    const vx = v0 * Math.cos(theta) * Math.cos(phi);
-    const vy = v0 * Math.cos(theta) * Math.sin(phi);
-    for(let i=0;i<steps;i++){
-      const t = i*dt;
-      const x = startGround[0] + vx*t;
-      const y = startGround[1] + vy*t;
-      const img = applyHInv(Hinv, [x,y]);
-      pts.push({x:img[0], y:img[1]});
-    }
-    Hinv.delete && Hinv.delete();
-    return pts;
-  } catch(e){ console.warn('predicted path error', e); return []; }
+function fitKinematicsBallScale(centers, m_per_px){
+  // 2D image-plane approximation using pixel-to-meter scale from ball diameter
+  if (!centers || centers.length<3 || !m_per_px) return null;
+  const i0 = 0, i2 = Math.min(2, centers.length-1);
+  const dt = Math.max(1e-4, centers[i2].t - centers[i0].t);
+  const dx_px = centers[i2].x - centers[i0].x;
+  const dy_px = centers[i2].y - centers[i0].y;
+  const v_pix = Math.hypot(dx_px, dy_px) / dt; // px/s
+  const v0 = v_pix * m_per_px; // m/s (approx)
+  const theta = Math.atan2(-dy_px, Math.abs(dx_px)+1e-6); // image-plane up is negative y
+  const phi = Math.atan2(0, 1); // unknown without homography; set 0
+  const carry_m = (v0*v0/9.80665)*Math.sin(2*theta)*0.65; // more conservative drag
+  return { v0, theta, phi, carry_m, n: centers.length };
+}
+
+/* ---------- Homography ---------- */
+function solveHomography(src4, dst4) {
+  const src = cv.matFromArray(4,1,cv.CV_32FC2, src4.flat());
+  const dst = cv.matFromArray(4,1,cv.CV_32FC2, dst4.flat());
+  const H = cv.findHomography(src, dst, cv.RANSAC, 5.0);
+  src.delete(); dst.delete();
+  if (!H || H.rows === 0 || H.cols === 0) throw new Error('Homography failed (empty).');
+  return H;
 }
 
 /* ---------- Analyze ---------- */
 analyzeBtn.onclick = async () => {
   try {
-    analyzeBtn.disabled = true; previewBtn.disabled = true;
-    predictedPath = []; // reset
-    why.textContent = 'Analyzing: solving homography…';
-    const [W,H] = calibMeters();
-    const dst = [[0,0],[0,H],[W,H],[W,0]];
-    const Hm = solveHomography(calibPts, dst);
+    analyzeBtn.disabled = true; playAnalyzedBtn.disabled = true;
+    why.textContent = 'Analyzing…';
+    // Extract frames
     const n = Math.max(6, Math.min(900, parseInt(numFramesEl.value||'180',10)));
     const method = methodSel.value;
     let frames;
@@ -630,26 +596,39 @@ analyzeBtn.onclick = async () => {
     log(`Extracted ${frames.length} frames via ${method}`);
     lastFrames = frames;
 
-    const centers = detectCenters(frames, roiRect || {x:0,y:0,w:canvas.width,h:canvas.height});
-    log(`Tracker outputs: ${centers.length} positions`);
+    if (!roiRect) { why.textContent = 'Set ROI first.'; analyzeBtn.disabled = false; return; }
+    if (!(ballInit && ballInit.tpl)) { why.textContent = 'Set Ball Init first.'; analyzeBtn.disabled = false; return; }
+
+    // Detect
+    const centers = detectCenters(frames, roiRect);
     lastCenters = centers.slice();
-    previewBtn.disabled = (centers.length === 0);
+    if (centers.length < 4) { why.textContent = 'Could not track — adjust Ball Init/ROI/thresholds.'; analyzeBtn.disabled=false; return; }
 
-    if (centers.length < 4) { why.textContent = 'Could not track — adjust Ball Init, widen ROI, brighten light, or tune thresholds.'; analyzeBtn.disabled = false; Hm.delete(); return; }
-    why.textContent = 'Fitting short-arc trajectory…';
-    const kin = fitKinematics(centers, Hm);
-    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; Hm.delete(); return; }
+    // Scale & Kinematics
+    let kin=null;
+    if (scaleModeSel.value === 'tray') {
+      if (calibPts.length !== 4) { why.textContent = 'Need 4 tray points for tray scale.'; analyzeBtn.disabled=false; return; }
+      const [W,Hm] = [0.34, 0.25]; // tray size in meters (34×25 cm)
+      const dst = [[0,0],[0,Hm],[W,Hm],[W,0]];
+      const H = solveHomography(calibPts, dst);
+      kin = fitKinematicsTray(centers, H);
+      H.delete();
+    } else if (scaleModeSel.value === 'ball') {
+      if (!ballScalePx) { why.textContent = 'Set ball scale (drag diameter) or switch to tray scale.'; analyzeBtn.disabled=false; return; }
+      kin = fitKinematicsBallScale(centers, m_per_px);
+    } else {
+      kin = fitKinematicsBallScale(centers, 1.0); // pixels-as-meters (for visualization only)
+    }
 
-    out.speed.textContent   = `${kin.v0.toFixed(1)} m/s (${(kin.v0*2.237).toFixed(1)} mph)`;
+    if (!kin) { why.textContent = 'Estimation failed.'; analyzeBtn.disabled=false; return; }
+
+    out.speed.textContent   = `${kin.v0.toFixed(1)} ${scaleModeSel.value==='none'?'px/s':'m/s'} (${scaleModeSel.value==='none'?'—':( (kin.v0*2.237).toFixed(1)+' mph')})`;
     out.launch.textContent  = `${(kin.theta*180/Math.PI).toFixed(1)}°`;
     out.azimuth.textContent = `${(kin.phi*180/Math.PI).toFixed(1)}°`;
-    out.carry.textContent   = `${(kin.carry_m.toFixed(1))} m`;
+    out.carry.textContent   = `${(kin.carry_m.toFixed(1))} ${scaleModeSel.value==='none'?'px':'m'}`;
     out.nframes.textContent = `${(kin.n)}`;
-    why.textContent = 'Drawing predicted path…';
-    predictedPath = computePredictedPath(Hm, centers, kin);
-    drawFrame();
-    Hm.delete();
-    why.textContent = 'Done ✅';
+    why.textContent = 'Done ✅ — ready to Play analyzed';
+    playAnalyzedBtn.disabled = false; pauseBtn.disabled = false; stopBtn.disabled = false;
   } catch (err) {
     console.error(err);
     log('Error: ' + (err && err.message ? err.message : String(err)));
@@ -659,28 +638,70 @@ analyzeBtn.onclick = async () => {
   }
 };
 
-/* ---------- Preview ---------- */
-previewBtn.onclick = async () => {
-  if (!lastFrames.length || !lastCenters.length) return;
-  for(let i=0;i<lastCenters.length;i++){
-    const c = lastCenters[i];
-    const f = lastFrames[c.idx] || lastFrames[lastFrames.length-1];
-    ctx.putImageData(f.img, 0, 0);
-    drawFrame(); // draws ROI, existing trail & predicted
-    const subTrail = lastCenters.slice(0, i+1).map(p=>({x:p.x,y:p.y}));
-    drawTrail(subTrail, Number(trailThick.value||3));
-    ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(c.x, c.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
-    await new Promise(r => setTimeout(r, 30));
+/* ---------- Analyzed playback (video + overlay together) ---------- */
+function overlayAtTime(now){
+  // Draw current video frame to overlay, then ROI, then trail up to 'now', and current dot near that time
+  drawOverlayFrame();
+  if (!lastCenters.length) return;
+  // Find index up to 'now'
+  let i = 0;
+  while (i < lastCenters.length && lastCenters[i].t <= now) i++;
+  const sub = lastCenters.slice(0, Math.max(1,i));
+  if (sub.length) {
+    drawTrail(sub.map(p=>({x:p.x,y:p.y})), 3);
+    const curr = sub[sub.length-1];
+    ctx.save(); ctx.fillStyle = '#4cd964'; ctx.beginPath(); ctx.arc(curr.x, curr.y, 7, 0, Math.PI*2); ctx.fill(); ctx.restore();
   }
+}
+
+function rafLoop(){
+  if (!playingAnalyzed) return;
+  if (hasRVFC && video.requestVideoFrameCallback){
+    video.requestVideoFrameCallback((now, meta)=>{
+      overlayAtTime(meta.mediaTime);
+      rAFHandle = requestAnimationFrame(rafLoop);
+    });
+  } else {
+    overlayAtTime(video.currentTime);
+    rAFHandle = requestAnimationFrame(rafLoop);
+  }
+}
+
+playAnalyzedBtn.onclick = async () => {
+  if (!lastCenters.length) return;
+  playingAnalyzed = true;
+  video.currentTime = analysisStartMediaTime;
+  try { await video.play(); } catch(_){}
+  cancelAnimationFrame(rAFHandle);
+  rAFHandle = requestAnimationFrame(rafLoop);
+  pauseBtn.disabled = false; stopBtn.disabled = false;
+};
+pauseBtn.onclick = () => {
+  playingAnalyzed = false; try { video.pause(); } catch(_){}
+  cancelAnimationFrame(rAFHandle);
+};
+stopBtn.onclick = () => {
+  playingAnalyzed = false; try { video.pause(); } catch(_){}
+  cancelAnimationFrame(rAFHandle);
+  try { video.currentTime = analysisStartMediaTime; } catch(_){}
+  drawOverlayFrame();
 };
 
-/* ---------- Status refresh ---------- */
-document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) maybeEnableAnalyze(); });
-
-/* ---------- Helpers ---------- */
-function canvasXY(e){ const r = canvas.getBoundingClientRect(); const x = (e.clientX - r.left) * canvas.width / r.width; const y = (e.clientY - r.top) * canvas.height / r.height; return {x,y}; }
-function normRect(a,b){ const x = Math.min(a.x,b.x), y = Math.min(a.y,b.y); const w = Math.abs(a.x-b.x), h = Math.abs(a.y-b.y); return {x,y,w,h}; }
-function tempRect(a,b){ return normRect(a,b); }
+/* ---------- Status ---------- */
+function maybeEnable(){
+  const okCV = window.cvReady && typeof cv !== 'undefined';
+  const okVid = !!video.src && (video.readyState >= 2);
+  const okROI = !!roiRect && roiRect.w > 5 && roiRect.h > 5;
+  const okBall = !!(ballInit && ballInit.tpl);
+  const mode = scaleModeSel.value;
+  const scaleOK = (mode==='tray' ? (calibPts.length===4) : (mode==='ball' ? !!ballScalePx : true));
+  const rvfc = !!video.requestVideoFrameCallback;
+  why.textContent = `Status: OpenCV ${okCV?'✅':'❌'} • Video ${okVid?'✅':'❌'} • ROI ${okROI?'✅':'❌'} • BallInit ${okBall?'✅':'❌'} • Scale ${scaleOK?'✅':'⚠️'} • rVFC ${rvfc?'✅':'❌'}`;
+  analyzeBtn.disabled = !(okCV && okVid && okROI && okBall);
+  playAnalyzedBtn.disabled = lastCenters.length === 0;
+  pauseBtn.disabled = !playingAnalyzed;
+  stopBtn.disabled = !lastCenters.length;
+}
 
 /* ---------- Service worker ---------- */
 if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('./sw.js'); } catch(e){} }
